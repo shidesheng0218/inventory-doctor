@@ -5,7 +5,7 @@
 **项目名**:`inventory-doctor`
 **一句话定位**:多平台库存同步诊断工具——找出你正在超卖但还不知道的 SKU。
 **形态**:单一 npm 包,提供 CLI(`inventory-doctor diff`)和 MCP server(`inventory-doctor mcp`)两个入口,共享同一套纯函数诊断内核。
-**技术栈**:TypeScript(ESM)、Node ≥ 20。
+**技术栈**:TypeScript(ESM)、Node ≥ 22(pnpm 11.x 要求 Node ≥ 22.13,故实施时把最低版本从最初计划的 20 上调)。
 **数据源**:CSV/Excel 导出文件(零凭据)+ Shopify Admin API(可选,自动拉取)。
 
 **核心设计原则(必须遵守)**:
@@ -292,7 +292,7 @@ Shopify 的 `Inventory tracker` 为空/关闭但该 SKU 在另一源有库存管
      "name": "inventory-doctor",
      "version": "0.1.0",
      "type": "module",
-     "engines": { "node": ">=20" },
+     "engines": { "node": ">=22" },
      "bin": { "inventory-doctor": "./dist/cli.js" },
      "files": ["dist"],
      "dependencies": {
