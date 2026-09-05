@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Multi-source inventory sync diagnostics — find the SKUs you're overselling without knowing it.",
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
   "license": "MIT",
   "author": "Mike Shi",
   "repository": {
