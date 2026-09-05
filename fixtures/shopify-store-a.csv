@@ -1,0 +1,14 @@
+Handle,Title,Variant SKU,Variant Barcode,Variant Inventory Qty,Variant Inventory Policy,Inventory tracker
+tee-black,Black Tee,ABC-123,1000001,10,deny,shopify
+mug-white,White Mug,DEF-456,1000002,5,deny,shopify
+cap-navy,Navy Cap,GHI-789,1000003,3,deny,shopify
+sticker-pack,Sticker Pack,ORPHAN-A,1000004,7,deny,shopify
+hoodie-grey,Grey Hoodie,DUP-100,1000005,4,deny,shopify
+hoodie-grey,Grey Hoodie,DUP-100,1000005,9,deny,shopify
+socks-wool,Wool Socks,OVER-1,1000006,0,deny,shopify
+tote-canvas,Canvas Tote,BLANK-1,1000007,,deny,shopify
+bottle-steel,Steel Bottle,ZERO-1,1000008,0,deny,shopify
+keychain,Keychain,BC-A,9999999,2,deny,shopify
+poster,Poster,DRIFT-1,1000010,100,deny,shopify
+candle,Candle,UNTRACKED-1,1000011,6,deny,
+notebook,Notebook,CONT-1,1000012,0,continue,shopify

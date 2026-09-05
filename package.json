@@ -1,0 +1,56 @@
+{
+  "name": "inventory-doctor",
+  "version": "0.1.0",
+  "description": "Multi-source inventory sync diagnostics — find the SKUs you're overselling without knowing it.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Mike Shi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shidesheng0218/inventory-doctor.git"
+  },
+  "homepage": "https://github.com/shidesheng0218/inventory-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/shidesheng0218/inventory-doctor/issues"
+  },
+  "keywords": [
+    "shopify",
+    "inventory",
+    "sync",
+    "mcp",
+    "cli",
+    "ecommerce",
+    "oversell"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "inventory-doctor": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "fixtures"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "mcp": "tsx src/mcp.ts",
+    "test": "vitest run",
+    "build": "tsc && node scripts/add-shebang.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:stdout": "! grep -rn 'console\\.log' src/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^3.25.0",
+    "commander": "^12.0.0",
+    "papaparse": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/papaparse": "^5.3.14",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

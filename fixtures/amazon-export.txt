@@ -1,0 +1,4 @@
+seller-sku	asin1	quantity	fulfillment-channel
+AMZ-TEE-BLK	B000TEE001	12	FBA
+AMZ-MUG-WHT	B000MUG002	0	FBA
+AMZ-CAP-NVY	B000CAP003		DEFAULT

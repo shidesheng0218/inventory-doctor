@@ -1,0 +1,13 @@
+URL handle,Title,SKU,Barcode,Inventory quantity,Inventory tracker
+tee-black,Black Tee,abc-123,1000001,10,shopify
+mug-white,White Mug,DEF-456 ,1000002,5,shopify
+cap-navy,Navy Cap,SHOP-GHI-789,2000003,3,shopify
+patch-set,Patch Set,ORPHAN-B,2000001,2,shopify
+hoodie-grey,Grey Hoodie,DUP-100,1000005,9,shopify
+socks-wool,Wool Socks,OVER-1,1000006,8,shopify
+tote-canvas,Canvas Tote,BLANK-1,1000007,5,shopify
+bottle-steel,Steel Bottle,ZERO-1,1000008,0,shopify
+keychain-new,Keychain (new),BC-B,9999999,4,shopify
+poster,Poster,DRIFT-1,1000010,92,shopify
+candle,Candle,UNTRACKED-1,1000011,6,shopify
+notebook,Notebook,CONT-1,1000012,0,shopify

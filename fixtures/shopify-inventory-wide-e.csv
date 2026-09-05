@@ -1,0 +1,3 @@
+Handle,Title,SKU,Barcode,Warehouse A,Warehouse B
+tee,Black Tee,WIDE-1,3000001,,4
+mug,White Mug,WIDE-2,3000002,20,3
