@@ -37,5 +37,5 @@ jobs:
             exit 1
           fi
 
-      - name: Smoke: built CLI answers --help
+      - name: "Smoke: built CLI answers --help"
         run: node dist/cli.js --help
