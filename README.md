@@ -6,6 +6,8 @@ Compare two inventory snapshots (CSV exports or live Shopify stores) and get a r
 
 **Your data never leaves your machine.** CSV files are parsed locally; Shopify API calls go directly from your computer to your own stores over HTTPS. There is no server, no telemetry, no upload.
 
+**Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
+
 ## Install & run
 
 ```bash
@@ -63,7 +65,36 @@ The full output is checked in as [`fixtures/expected-report.md`](fixtures/expect
 
 The exit code is `1` when critical findings exist, so you can wire this into CI or a cron job.
 
-## The six diagnostic rules
+## Fix export — from finding to fix
+
+`--fix-export` turns critical findings into a Shopify-importable inventory CSV that brings the **second** source in line with the **first** (the source of truth):
+
+```bash
+inventory-doctor diff a.csv b.csv --fix-export fix.csv
+# → fix direction: bring "b" in line with "a" (first source = source of truth)
+# → review fix.csv, verify it, then import it into b
+```
+
+**Watch the direction.** With mixed flags the "first" source is not necessarily the first flag you typed — precedence is: positional files, then `--csv`, then `--store`/`--woo`, then `--baseline`. The run always prints the direction before writing, so check that line.
+
+The tool never writes to any API. The fix is a file you can read, diff, and re-check before importing — the run prints the exact verify command (`inventory-doctor diff <truth-source> fix.csv`), so you can prove the fix would heal the report first. An auditable fix, not a silent mutation. Critical findings that an inventory import cannot fix (e.g. a SKU missing from the target entirely) are called out explicitly instead of being silently dropped.
+
+## Snapshots — time-series diagnosis
+
+A single diff compares two snapshots taken now. Saving snapshots over time unlocks the seventh rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
+
+```bash
+inventory-doctor snapshot save store-a.csv            # or: --store store-a via snapshot save store:store-a
+inventory-doctor snapshot list shopify-store-a
+inventory-doctor snapshot check shopify-store-a       # needs ≥3 snapshots; exit 1 on critical
+
+inventory-doctor diff now.csv --baseline shopify-store-a          # latest snapshot
+inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specific one
+```
+
+Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and you have daily reconciliation with zero infrastructure.
+
+## The seven diagnostic rules
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
@@ -73,6 +104,7 @@ The exit code is `1` when critical findings exist, so you can wire this into CI 
 | `barcode-crosscheck` | Same barcode, different SKUs across sources — silent mapping misconfiguration | critical |
 | `quantity-drift` | Overall sync health: % exact / minor drift / severe drift / unmatched → health score 0–100 | info |
 | `untracked` | Inventory tracking disabled in one source while another manages stock | info |
+| `nightly-zero` | Time-series across saved snapshots: a SKU with a stable positive history suddenly reading 0 ("silently zeroed overnight"), vanishing, or dropping suspiciously fast | warning → critical |
 
 **Blank vs "0" is a first-class distinction.** CSV parsers love turning empty cells into 0; this tool keeps `quantity: null` strictly separate from `quantity: 0` all the way through.
 
@@ -113,15 +145,66 @@ inventory-doctor diff --store store-a --store store-b   # store vs store
 inventory-doctor diff --store store-a --csv b.csv       # mixed mode
 ```
 
+The same file can tune the diagnostic rules (all optional; CLI flags win over these):
+
+```jsonc
+{
+  "rules": {
+    "disable": ["untracked"],                     // turn a rule off entirely
+    "ignoreSkus": ["GIFT-*", "TEST-?"],           // glob vs canonical SKU — findings dropped
+    "severityOverrides": { "blank-vs-zero": "warning" },
+    "driftAbsThreshold": 10,                      // like --drift-abs
+    "driftPctThreshold": 0.3                      // like --drift-pct
+  }
+}
+```
+
 Details that matter:
 
 - API version pinned to **2026-07** (`/admin/api/2026-07/graphql.json`).
 - Inventory is read via `quantities(names: [...])` — the old `InventoryLevel.available` field no longer exists.
 - Tokens from client credentials live 24h; they're cached and refreshed 60s early, not re-requested per call.
+- Every HTTP request has a 30s timeout, and transient network failures (reset, DNS, timeout) are retried with the same 1s backoff as rate limits — a hung store cannot hang the run.
 - Rate limiting is **adaptive**: every response's `extensions.cost.throttleStatus.currentlyAvailable` drives a slow-down before the bucket empties; HTTP 429 / `THROTTLED` backs off 1s and retries. No plan-specific rate numbers are hardcoded.
 - Read-only scopes only: `read_inventory`, `read_products`, `read_locations`.
 
-**Client credentials limitation:** the app and the store must belong to the **same Shopify org**. That covers "a merchant building a tool for their own store". Agencies managing client stores will get `shop_not_permitted` and need full OAuth — which this tool does **not** implement (v1).
+**Client credentials limitation:** the app and the store must belong to the **same Shopify org**. That covers "a merchant building a tool for their own store". Agencies managing client stores get `shop_not_permitted` from client credentials — use the OAuth flow below instead.
+
+## Shopify OAuth (agency / cross-org)
+
+One-time browser flow per store. Prerequisite: a Dev Dashboard app with a loopback redirect URL (`http://127.0.0.1`) registered — see Shopify's OAuth docs.
+
+```bash
+inventory-doctor auth client-store.myshopify.com --client-id ... --client-secret ...
+```
+
+This opens the consent screen, exchanges the code for an **offline token** (never expires), and saves it to `~/.config/inventory-doctor/oauth-tokens.json` (mode 0600) — not to your project config. Then reference it with `"oauth": true`:
+
+```jsonc
+{ "name": "client-store", "domain": "client-store.myshopify.com", "oauth": true }
+```
+
+## WooCommerce (REST API)
+
+Add a `woocommerce` section to `inventory-doctor.json` (consumer key/secret from WooCommerce → Settings → Advanced → REST API):
+
+```jsonc
+{
+  "woocommerce": [
+    { "name": "woo-shop", "baseUrl": "https://shop.example.com",
+      "consumerKey": "env:WOO_CK", "consumerSecret": "env:WOO_CS" }
+  ]
+}
+```
+
+Then `woo:<name>` works everywhere a source is accepted:
+
+```bash
+inventory-doctor diff --store store-a --woo woo-shop   # Shopify vs WooCommerce
+inventory-doctor diff woo-shop-export.csv --woo woo-shop
+```
+
+Notes: HTTPS is enforced (Basic Auth over plain HTTP would leak credentials). `manage_stock: false` maps to "tracking off" (the `untracked` rule fires as usual), and `backorders: yes/notify` maps to "continue selling when out of stock". WooCommerce core has no multi-location inventory, so Woo sources have no location dimension.
 
 ## MCP server (use it from Claude Code and other agents)
 
@@ -142,18 +225,18 @@ Add to your `.mcp.json`:
 
 Three tools are registered:
 
-- `diff_inventory(sourceA, sourceB, configPath?)` — full diagnosis, returns the JSON report
+- `diff_inventory(sourceA, sourceB, configPath?, maxFindings?)` — full diagnosis, returns the JSON report. Findings are capped at `maxFindings` (default 100) so a large catalog cannot flood the agent's context; on truncation the payload carries `totalFindings` and points at `explain_sku` for the remainder.
 - `explain_sku(sku, sources, configPath?)` — one SKU's raw values and findings across all sources (for follow-up questions)
 - `inventory_health(sources, configPath?)` — lightweight health-score summary
 
-Every source argument accepts either a **CSV file path** or **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
+Every source argument accepts either a **CSV file path**, **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars), or **`snapshot:<name>[@<id>]`** (a saved snapshot) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
 
 stdout is reserved for JSON-RPC; all logging goes to stderr.
 
 ## Honest limitations
 
-- **Snapshot diffing only.** This compares two snapshots taken now. It does **not** do time-series detection (e.g. "this SKU gets silently zeroed every night") — that needs snapshot history and is planned for v2.
-- **Client credentials = same org only**, as described above. No OAuth flow in v1.
+- **Time-series needs saved snapshots.** `snapshot check` detects silent zeroing across history, but only over snapshots you actually saved — it cannot reconstruct the past before the first save.
+- **WooCommerce has no multi-location inventory** in core; per-location diagnosis on that side needs a CSV export from a multi-location plugin instead.
 - Amazon report headers vary by marketplace and report options; detection is best-effort via column aliases, and `--map` is the escape hatch.
 - Product CSVs carry no per-location inventory; multi-location diagnosis needs the inventory CSV export or the API.
 

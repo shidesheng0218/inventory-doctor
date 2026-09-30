@@ -48,6 +48,25 @@ describe('MCP tools (InMemoryTransport)', () => {
     }
   });
 
+  it('diff_inventory truncates findings at maxFindings and points to explain_sku', async () => {
+    await withClient(async (client) => {
+      const result = await client.callTool({
+        name: 'diff_inventory',
+        arguments: { sourceA: A, sourceB: B, maxFindings: 3 },
+      });
+      const payload = JSON.parse(textOf(result)) as {
+        findings: unknown[];
+        totalFindings: number;
+        findingsTruncated: boolean;
+        nextStep: string;
+      };
+      expect(payload.findings).toHaveLength(3);
+      expect(payload.findingsTruncated).toBe(true);
+      expect(payload.totalFindings).toBeGreaterThan(3);
+      expect(payload.nextStep).toContain('explain_sku');
+    });
+  });
+
   it('explain_sku returns per-source detail for one SKU', async () => {
     await withClient(async (client) => {
       const result = await client.callTool({

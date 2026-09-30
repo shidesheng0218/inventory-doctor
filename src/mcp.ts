@@ -1,39 +1,52 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { explainSku, inventoryHealth, runDiff, type SourceInput } from './run.js';
+import { explainSku, inventoryHealth, parseSourceArg, runDiff } from './run.js';
+
+export { parseSourceArg };
 
 // MCP entry point. stdout is the JSON-RPC channel: NOTHING may write to it
 // except the SDK transport. All logging goes to console.error (stderr).
 // Every log line in this file and its imports must honor that.
 
-// A source argument is either a CSV file path or "store:<name>" — the latter
-// resolves through the config file + env-referenced credentials.
-export function parseSourceArg(value: string): SourceInput {
-  if (value.startsWith('store:')) {
-    const name = value.slice('store:'.length).trim();
-    if (name === '') throw new Error('source "store:" is missing the store name, expected "store:<name>"');
-    return { kind: 'store', name };
-  }
-  return { kind: 'csv', path: value };
-}
-
-const SOURCE_DESC = 'CSV file path, or "store:<name>" for a configured Shopify store';
+// A source argument is a CSV file path, "store:<name>" (resolved through the
+// config file + env-referenced credentials), or "snapshot:<name>[@<id>]".
+// Parsing lives in run.ts so the CLI and MCP share one definition.
+const SOURCE_DESC = 'CSV file path, "store:<name>" for a configured Shopify store, "woo:<name>" for a configured WooCommerce store, or "snapshot:<name>[@<id>]" for a saved snapshot';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({ name: 'inventory-doctor', version: '0.1.0' });
 
   server.tool(
     'diff_inventory',
-    'Compare inventory across two sources (CSV files and/or configured Shopify stores) and report sync problems (SKU mismatches, oversell risk, blank-vs-zero cells, barcode conflicts, drift).',
+    'Compare inventory across two sources (CSV files and/or configured Shopify stores) and report sync problems (SKU mismatches, oversell risk, blank-vs-zero cells, barcode conflicts, drift). Findings are capped (maxFindings) to keep the payload small; use explain_sku for per-SKU follow-ups.',
     {
       sourceA: z.string().describe(SOURCE_DESC),
       sourceB: z.string().describe(SOURCE_DESC),
       configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+      maxFindings: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .optional()
+        .describe('Cap on findings returned (default 100). On truncation the response carries totalFindings + a next-step hint.'),
     },
-    async ({ sourceA, sourceB, configPath }) => {
+    async ({ sourceA, sourceB, configPath, maxFindings }) => {
       const { report } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }] };
+      const cap = maxFindings ?? 100;
+      if (report.findings.length <= cap) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }] };
+      }
+      const payload = {
+        ...report,
+        findings: report.findings.slice(0, cap),
+        totalFindings: report.findings.length,
+        findingsTruncated: true,
+        nextStep:
+          'Findings were truncated to maxFindings. They are sorted by severity, so the most important ones are included. Use explain_sku(sku, sources) for per-SKU detail on anything omitted.',
+      };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
     },
   );
 

@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { runDiff } from '../src/run.js';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runDiff, runSnapshotCheck } from '../src/run.js';
+import { saveSnapshot } from '../src/snapshots.js';
+import { loadCsv } from '../src/adapters/csv/index.js';
 import { renderMarkdown } from '../src/report/markdown.js';
 
 const A = 'fixtures/shopify-store-a.csv';
@@ -121,5 +126,111 @@ describe('Amazon-style TSV fixture end-to-end', () => {
     const blank = amazon?.records.find((r) => r.sku === 'AMZ-CAP-NVY');
     expect(blank?.quantity).toBeNull();
     expect(blank?.quantityRaw).toBe('');
+  });
+});
+
+describe('load failures are loud, never a vacuous "healthy" report', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'inventory-doctor-load-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('rejects a headers-only CSV (0 records) instead of reporting health 100', async () => {
+    const empty = join(dir, 'empty.csv');
+    await writeFile(empty, 'Handle,Title,SKU,Variant Inventory Qty\n', 'utf8');
+    await expect(runDiff([{ kind: 'csv', path: empty }, { kind: 'csv', path: A }])).rejects.toThrow(/0 records/);
+  });
+
+  it('rejects a CSV whose SKU column is entirely blank', async () => {
+    const blank = join(dir, 'blank-skus.csv');
+    await writeFile(blank, 'Handle,Title,SKU,Variant Inventory Qty\nw,Widget,,5\n', 'utf8');
+    await expect(runDiff([{ kind: 'csv', path: blank }, { kind: 'csv', path: A }])).rejects.toThrow(/0 records/);
+  });
+
+  it('says "CSV file not found" instead of a raw ENOENT', async () => {
+    await expect(runDiff([{ kind: 'csv', path: join(dir, 'nope.csv') }, { kind: 'csv', path: A }])).rejects.toThrow(
+      /CSV file not found/,
+    );
+  });
+});
+
+describe('CLI: --fix-export never clobbers an existing file', () => {
+  const tsx = join('node_modules', '.bin', 'tsx');
+  const runCli = (args: string[]) =>
+    new Promise<{ code: number | null; stdout: string; stderr: string }>((resolvePromise) => {
+      execFile(tsx, ['src/cli.ts', ...args], (error, stdout, stderr) => {
+        resolvePromise({ code: error ? (error as { code?: number }).code ?? 1 : 0, stdout, stderr });
+      });
+    });
+
+  it('refuses to overwrite without --force, overwrites with it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'inventory-doctor-fix-'));
+    try {
+      const fixPath = join(dir, 'fix.csv');
+      const first = await runCli(['diff', A, B, '--fix-export', fixPath]);
+      expect(first.code).toBe(1); // critical findings exist
+      expect(first.stderr).toContain('fix rows');
+      // The fix direction must be explicit: first source = source of truth.
+      expect(first.stderr).toContain('fix direction: bring "shopify-store-b" in line with "shopify-store-a"');
+      expect(first.stderr).toContain(`verify before importing: inventory-doctor diff ${A} ${fixPath}`);
+      expect(first.stderr).toContain('not covered by this fix file');
+
+      const second = await runCli(['diff', A, B, '--fix-export', fixPath]);
+      expect(second.code).toBe(2);
+      expect(second.stderr).toContain('already exists');
+      expect(second.stderr).toContain('--force');
+
+      const third = await runCli(['diff', A, B, '--fix-export', fixPath, '--force']);
+      expect(third.code).toBe(1);
+      expect(third.stderr).toContain('fix rows');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe('snapshot history end-to-end', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'inventory-doctor-e2e-'));
+    process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'] = dir;
+  });
+  afterEach(async () => {
+    delete process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'];
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('diff --baseline: a clean CSV vs its own snapshot is a perfect score', async () => {
+    // Fixture A contains planted single-source problems (dup SKU, blank cell)
+    // that fire in ANY comparison, so use a small clean catalog here.
+    const clean = 'Handle,Title,SKU,Variant Inventory Qty\nw,Widget,W-1,5\nt,Tee,T-1,3\n';
+    const records = loadCsv(clean, 'clean-shop').records;
+    await saveSnapshot('clean-shop', records, new Date('2026-09-01T08:00:00Z'));
+
+    const { report, sources } = await runDiff([
+      { kind: 'csv', path: 'fixtures/clean-shop.csv' },
+      { kind: 'snapshot', ref: 'clean-shop' },
+    ]);
+    expect(sources[1]?.name).toBe('clean-shop@2026-09-01T08-00-00');
+    // quantity-drift always emits its health-score info line; nothing above info.
+    expect(report.findings.filter((f) => f.severity !== 'info')).toHaveLength(0);
+    expect(report.healthScore).toBe(100);
+  });
+
+  it('snapshot check catches a silently zeroed SKU across 3 snapshots', async () => {
+    const csv = (qty: number) => `Handle,Title,SKU,Variant Inventory Qty\nw,Widget,WIDGET-9,${qty}\n`;
+    for (const [i, qty] of [12, 12, 0].entries()) {
+      const result = loadCsv(csv(qty), 'shop');
+      await saveSnapshot('shop', result.records, new Date(`2026-09-0${i + 1}T08:00:00Z`));
+    }
+    const check = await runSnapshotCheck('shop');
+    expect(check.snapshots).toHaveLength(3);
+    const critical = check.findings.filter((f) => f.severity === 'critical');
+    expect(critical).toHaveLength(1);
+    expect(critical[0]?.message).toContain('WIDGET-9');
+    expect(critical[0]?.message).toContain('silently zeroed');
   });
 });
