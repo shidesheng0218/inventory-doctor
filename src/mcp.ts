@@ -15,7 +15,7 @@ export { parseSourceArg };
 const SOURCE_DESC = 'CSV file path, "store:<name>" for a configured Shopify store, "woo:<name>" for a configured WooCommerce store, or "snapshot:<name>[@<id>]" for a saved snapshot';
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: 'inventory-doctor', version: '0.2.0' });
+  const server = new McpServer({ name: 'inventory-doctor', version: '0.2.1' });
 
   server.tool(
     'diff_inventory',
