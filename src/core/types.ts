@@ -28,6 +28,10 @@ export interface DiagnoseOptions {
   // quantity-drift / oversell thresholds: flag when |a-b| > max(abs, pct * max(|a|,|b|))
   driftAbsThreshold: number;
   driftPctThreshold: number; // 0..1
+  // Rule-level configuration (usually from inventory-doctor.json "rules").
+  disabledRules?: string[]; // rule ids to skip entirely
+  ignoreSkus?: string[]; // glob patterns ("GIFT-*") matched against the CANONICAL sku
+  severityOverrides?: Record<string, Severity>; // rule id → forced severity
 }
 
 export const DEFAULT_DIAGNOSE_OPTIONS: DiagnoseOptions = {
