@@ -1,6 +1,6 @@
 {
   "name": "inventory-doctor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-source inventory sync diagnostics — find the SKUs you're overselling without knowing it.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -26,8 +26,32 @@
   "engines": {
     "node": ">=22"
   },
+  "main": "./dist/run.js",
+  "types": "./dist/run.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/run.d.ts",
+      "default": "./dist/run.js"
+    },
+    "./core": {
+      "types": "./dist/core/diagnose.d.ts",
+      "default": "./dist/core/diagnose.js"
+    },
+    "./types": {
+      "types": "./dist/core/types.d.ts",
+      "default": "./dist/core/types.js"
+    },
+    "./snapshots": {
+      "types": "./dist/snapshots.d.ts",
+      "default": "./dist/snapshots.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "inventory-doctor": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",
@@ -39,7 +63,8 @@
     "test": "vitest run",
     "build": "tsc && node scripts/add-shebang.mjs",
     "typecheck": "tsc --noEmit",
-    "check:stdout": "! grep -rn 'console\\.log' src/"
+    "check:stdout": "! grep -rn 'console\\.log' src/",
+    "prepublishOnly": "pnpm run build && pnpm run test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
