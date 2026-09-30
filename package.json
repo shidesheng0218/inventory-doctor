@@ -52,7 +52,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "inventory-doctor": "./dist/cli.js"
+    "inventory-doctor": "dist/cli.js"
   },
   "publishConfig": {
     "access": "public"
