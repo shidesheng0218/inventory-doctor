@@ -12,6 +12,7 @@ export const BACKOFF_MS = 1_000;
 // Start waiting when fewer than this fraction of the bucket remains.
 const LOW_BUDGET_FRACTION = 0.1;
 const MAX_RETRIES = 5;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export interface ThrottleStatus {
   maximumAvailable: number;
@@ -37,19 +38,31 @@ export interface ShopifyClientOptions {
   fetchFn?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   maxRetries?: number;
+  timeoutMs?: number; // per-request timeout; a hung store must not hang the run
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// fetch() rejections are transient network failures (DNS, reset, timeout) —
+// retry them like 429s instead of dying on the first dropped packet.
+function networkError(err: unknown, target: string, timeoutMs: number): Error {
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return new Error(`Shopify API request to ${target} timed out after ${timeoutMs}ms`);
+  }
+  return new Error(`Shopify API request to ${target} failed: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 export class ShopifyClient {
   private readonly fetchFn: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly maxRetries: number;
+  private readonly timeoutMs: number;
 
   constructor(private readonly options: ShopifyClientOptions) {
     this.fetchFn = options.fetchFn ?? fetch;
     this.sleep = options.sleep ?? defaultSleep;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
+    this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   get endpoint(): string {
@@ -61,14 +74,22 @@ export class ShopifyClient {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       const token = await this.options.tokenProvider.getToken();
-      const res = await this.fetchFn(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': token,
-        },
-        body: JSON.stringify({ query, variables }),
-      });
+      let res: Response;
+      try {
+        res = await this.fetchFn(this.endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shopify-Access-Token': token,
+          },
+          body: JSON.stringify({ query, variables }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (err) {
+        lastError = networkError(err, this.options.domain, this.timeoutMs);
+        await this.sleep(BACKOFF_MS);
+        continue;
+      }
 
       if (res.status === 429) {
         lastError = new Error(`Rate limited (HTTP 429) by ${this.options.domain}`);

@@ -121,6 +121,43 @@ describe('ShopifyClient', () => {
     await expect(client.graphql('{ ok }')).rejects.toThrow(/429/);
     expect(fetchFn.mock.calls.length).toBeGreaterThan(1);
   });
+
+  it('retries transient network errors like 429s', async () => {
+    const sleeps: number[] = [];
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(graphqlResponse({ data: { ok: true }, extensions: { cost: cost(900) } }));
+    const client = makeClient(fetchFn, sleeps);
+    const data = await client.graphql<{ ok: boolean }>('{ ok }');
+    expect(data.ok).toBe(true);
+    expect(sleeps).toEqual([1000]);
+  });
+
+  it('times out a hung request and reports the timeout clearly', async () => {
+    const sleeps: number[] = [];
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          (init as RequestInit).signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation timed out', 'TimeoutError')),
+          );
+        }),
+    );
+    const client = new ShopifyClient({
+      domain: 'a.myshopify.com',
+      tokenProvider: new StaticTokenProvider('shpat_x'),
+      fetchFn,
+      sleep: (ms) => {
+        sleeps.push(ms);
+        return noSleep();
+      },
+      timeoutMs: 5,
+      maxRetries: 1,
+    });
+    await expect(client.graphql('{ ok }')).rejects.toThrow(/timed out after 5ms/);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('fetchInventory', () => {

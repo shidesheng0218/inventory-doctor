@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { RULES } from './core/diagnose.js';
+import type { Severity } from './core/types.js';
 
 // Store config. Credentials may be written inline or referenced as
 // "env:VAR_NAME" so secrets never have to live in the file.
@@ -13,10 +15,31 @@ export interface StoreConfig {
   // Mode 2: client credentials grant (new apps since 2026-01)
   clientId?: string;
   clientSecret?: string;
+  // Mode 3: offline token from "inventory-doctor auth <domain>" (agency / cross-org)
+  oauth?: boolean;
+}
+
+// WooCommerce store config (REST API v3, consumer key/secret).
+export interface WooStoreConfig {
+  name: string;
+  baseUrl: string; // e.g. "https://shop.example.com"
+  consumerKey: string;
+  consumerSecret: string;
+}
+
+// Rule-level knobs. CLI flags (--drift-abs / --drift-pct) win over these.
+export interface RulesConfig {
+  disable?: string[]; // rule ids to turn off
+  ignoreSkus?: string[]; // glob patterns matched against the canonical SKU
+  severityOverrides?: Record<string, Severity>; // rule id → forced severity
+  driftAbsThreshold?: number;
+  driftPctThreshold?: number;
 }
 
 export interface AppConfig {
   stores: StoreConfig[];
+  woocommerce?: WooStoreConfig[];
+  rules?: RulesConfig;
 }
 
 const DEFAULT_CONFIG_PATHS = [
@@ -40,7 +63,46 @@ export async function loadConfig(explicitPath?: string): Promise<AppConfig> {
   for (const store of parsed.stores) {
     validateStore(store, path);
   }
+  for (const woo of parsed.woocommerce ?? []) {
+    if (!woo.name || !woo.baseUrl || !woo.consumerKey || !woo.consumerSecret) {
+      throw new Error(
+        `Invalid WooCommerce entry in ${path}: each entry needs "name", "baseUrl", "consumerKey", and "consumerSecret".`,
+      );
+    }
+  }
+  if (parsed.rules !== undefined) {
+    validateRules(parsed.rules, path);
+  }
   return parsed;
+}
+
+// Like loadConfig, but CSV-only runs may legitimately have no config file:
+// returns null instead of throwing when none exists. A file that EXISTS but
+// is invalid still throws — silent misconfiguration is worse than no config.
+export async function loadConfigIfExists(explicitPath?: string): Promise<AppConfig | null> {
+  const path = explicitPath ?? DEFAULT_CONFIG_PATHS.find((p) => existsSync(p));
+  if (!path || !existsSync(path)) return null;
+  return loadConfig(path);
+}
+
+const SEVERITIES = ['critical', 'warning', 'info'];
+
+function validateRules(rules: RulesConfig, path: string): void {
+  const badRule = (id: string) => !(RULES as readonly string[]).includes(id);
+  for (const id of rules.disable ?? []) {
+    if (badRule(id)) throw new Error(`Invalid config at ${path}: unknown rule "${id}" in rules.disable. Known: ${RULES.join(', ')}`);
+  }
+  for (const [id, severity] of Object.entries(rules.severityOverrides ?? {})) {
+    if (badRule(id)) throw new Error(`Invalid config at ${path}: unknown rule "${id}" in rules.severityOverrides.`);
+    if (!SEVERITIES.includes(severity)) {
+      throw new Error(`Invalid config at ${path}: severity for "${id}" must be one of ${SEVERITIES.join(', ')}.`);
+    }
+  }
+  for (const [key, value] of [['driftAbsThreshold', rules.driftAbsThreshold], ['driftPctThreshold', rules.driftPctThreshold]] as const) {
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+      throw new Error(`Invalid config at ${path}: rules.${key} must be a non-negative number.`);
+    }
+  }
 }
 
 function validateStore(store: StoreConfig, path: string): void {
@@ -49,9 +111,9 @@ function validateStore(store: StoreConfig, path: string): void {
   }
   const hasStatic = Boolean(store.accessToken);
   const hasClientCreds = Boolean(store.clientId && store.clientSecret);
-  if (!hasStatic && !hasClientCreds) {
+  if (!hasStatic && !hasClientCreds && store.oauth !== true) {
     throw new Error(
-      `Store "${store.name}" in ${path} has no credentials: set either "accessToken" or both "clientId" and "clientSecret".`,
+      `Store "${store.name}" in ${path} has no credentials: set "accessToken", both "clientId" and "clientSecret", or "oauth": true.`,
     );
   }
 }
@@ -60,6 +122,16 @@ export function findStore(config: AppConfig, name: string): StoreConfig {
   const store = config.stores.find((s) => s.name === name);
   if (!store) {
     throw new Error(`Store "${name}" not found in config. Available: ${config.stores.map((s) => s.name).join(', ')}`);
+  }
+  return store;
+}
+
+export function findWooStore(config: AppConfig, name: string): WooStoreConfig {
+  const store = (config.woocommerce ?? []).find((s) => s.name === name);
+  if (!store) {
+    throw new Error(
+      `WooCommerce store "${name}" not found in config. Available: ${(config.woocommerce ?? []).map((s) => s.name).join(', ') || '(none)'}`,
+    );
   }
   return store;
 }

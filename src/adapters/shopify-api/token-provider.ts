@@ -1,7 +1,8 @@
-// Dual-mode credential layer. Old "Develop apps" path can no longer create
+// Three-mode credential layer. Old "Develop apps" path can no longer create
 // permanent tokens (since 2026-01-01) but existing shpat_ tokens still work;
-// new apps use the client credentials grant against the SHOP domain.
-// Both modes converge behind one TokenProvider interface.
+// new same-org apps use the client credentials grant; cross-org (agency)
+// setups use the interactive OAuth flow with an offline token on disk.
+// All modes converge behind one TokenProvider interface.
 
 export interface TokenProvider {
   getToken(): Promise<string>;
@@ -14,6 +15,21 @@ export class StaticTokenProvider implements TokenProvider {
   }
 }
 
+// Mode 3: token obtained via the interactive OAuth flow (`inventory-doctor
+// auth <domain>`), read from the local oauth-tokens.json file. Offline token —
+// never expires, nothing to refresh.
+export class OAuthTokenProvider implements TokenProvider {
+  constructor(private readonly domain: string) {}
+  async getToken(): Promise<string> {
+    const { readOAuthToken } = await import('./oauth.js');
+    const token = await readOAuthToken(this.domain);
+    if (token === null) {
+      throw new Error(`No OAuth token for ${this.domain}. Run: inventory-doctor auth ${this.domain}`);
+    }
+    return token;
+  }
+}
+
 export interface ClientCredentialsOptions {
   domain: string; // shop domain, e.g. "my-store.myshopify.com"
   clientId: string;
@@ -21,6 +37,7 @@ export interface ClientCredentialsOptions {
   // Injectable for tests; defaults to global fetch.
   fetchFn?: typeof fetch;
   now?: () => number;
+  timeoutMs?: number; // per-request timeout on the token endpoint
 }
 
 interface CachedToken {
@@ -37,10 +54,12 @@ export class ClientCredentialsProvider implements TokenProvider {
   private inflight: Promise<string> | null = null;
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
+  private readonly timeoutMs: number;
 
   constructor(private readonly options: ClientCredentialsOptions) {
     this.fetchFn = options.fetchFn ?? fetch;
     this.now = options.now ?? Date.now;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   async getToken(): Promise<string> {
@@ -63,11 +82,23 @@ export class ClientCredentialsProvider implements TokenProvider {
       client_id: this.options.clientId,
       client_secret: this.options.clientSecret,
     });
-    const res = await this.fetchFn(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (err) {
+      // Network failure or timeout on the token endpoint — surface a clear
+      // message; the next getToken() call retries (inflight is reset).
+      const why =
+        err instanceof Error && err.name === 'TimeoutError'
+          ? `timed out after ${this.timeoutMs}ms`
+          : `failed: ${err instanceof Error ? err.message : String(err)}`;
+      throw new Error(`Token request for ${this.options.domain} ${why}.`);
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(
@@ -93,6 +124,7 @@ export function tokenProviderFor(store: {
   accessToken?: string | undefined;
   clientId?: string | undefined;
   clientSecret?: string | undefined;
+  oauth?: boolean | undefined;
 }): TokenProvider {
   if (store.accessToken) {
     return new StaticTokenProvider(store.accessToken);
@@ -104,5 +136,8 @@ export function tokenProviderFor(store: {
       clientSecret: store.clientSecret,
     });
   }
-  throw new Error(`Store "${store.domain}": provide accessToken or clientId+clientSecret.`);
+  if (store.oauth) {
+    return new OAuthTokenProvider(store.domain);
+  }
+  throw new Error(`Store "${store.domain}": provide accessToken, clientId+clientSecret, or "oauth": true.`);
 }
