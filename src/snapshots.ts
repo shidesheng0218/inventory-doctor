@@ -20,6 +20,16 @@ export interface LoadedSnapshot extends SnapshotInfo {
   records: InventoryRecord[];
 }
 
+// Cheapest possible view of a history: directory listing only. Counting
+// records means reading every file, which is O(history) I/O — fine for one
+// snapshot, ruinous when a year of daily snapshots is involved. Callers that
+// only need ids/timestamps (choosing a window, trimming) use this.
+export interface SnapshotStub {
+  id: string;
+  path: string;
+  savedAt: string;
+}
+
 export function snapshotRoot(): string {
   return process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'] ?? join(homedir(), '.local', 'share', 'inventory-doctor', 'snapshots');
 }
@@ -49,14 +59,21 @@ export async function saveSnapshot(sourceName: string, records: InventoryRecord[
   return { id, path, savedAt: now.toISOString(), recordCount: records.length };
 }
 
-export async function listSnapshots(sourceName: string): Promise<SnapshotInfo[]> {
+export async function listSnapshotStubs(sourceName: string): Promise<SnapshotStub[]> {
   const dir = dirFor(sourceName);
   if (!existsSync(dir)) return [];
   const files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort();
-  const infos: SnapshotInfo[] = [];
-  for (const file of files) {
+  return files.map((file) => {
     const id = file.slice(0, -'.jsonl'.length);
-    const path = join(dir, file);
+    return { id, path: join(dir, file), savedAt: savedAtFromId(id) };
+  });
+}
+
+export async function listSnapshots(sourceName: string): Promise<SnapshotInfo[]> {
+  const stubs = await listSnapshotStubs(sourceName);
+  const infos: SnapshotInfo[] = [];
+  for (const stub of stubs) {
+    const { id, path } = stub;
     const content = await readFile(path, 'utf8');
     const recordCount = content.split('\n').filter((line) => line.trim() !== '').length;
     infos.push({ id, path, savedAt: savedAtFromId(id), recordCount });
@@ -78,7 +95,10 @@ export async function loadSnapshot(ref: string): Promise<LoadedSnapshot> {
   const idPrefix = at === -1 ? null : ref.slice(at + 1);
   if (name === '') throw new Error('Invalid snapshot reference. Use "<name>", "<name>@<id>", or a file path.');
 
-  const all = await listSnapshots(name);
+  // Stubs, not listSnapshots: resolving a reference must not read (and count)
+  // every file in the history. This runs once per loaded snapshot, so counting
+  // here would make a windowed check do O(history) I/O N times over.
+  const all = await listSnapshotStubs(name);
   if (all.length === 0) {
     throw new Error(`No snapshots for "${name}". Save one first: inventory-doctor snapshot save <source>`);
   }

@@ -8,6 +8,21 @@ Compare two inventory snapshots (CSV exports or live Shopify stores) and get a r
 
 **Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
 
+## Who this is for
+
+* **Developers and agencies** run the engine directly: the CLI and the MCP
+  server are the whole diagnostic core, MIT, no account, no service in the
+  middle. Wire `snapshot save` + `snapshot check` into your own cron or CI and you
+  own the schedule.
+* **Merchants and teams who would rather not run infrastructure** get the
+  same engine behind a hosted app (in development): it schedules the daily
+  check, keeps the history, compares the store against a 3PL/ERP export, and
+  alerts when something breaks.
+
+The split is deliberate and one-way: the engine stays open so you can audit
+exactly what is being judged and run it yourself; the hosted app adds the
+boring parts (scheduling, storage, alerting, multi-source plumbing).
+
 ## Install & run
 
 ```bash
@@ -92,7 +107,21 @@ inventory-doctor diff now.csv --baseline shopify-store-a          # latest snaps
 inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specific one
 ```
 
-Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and you have daily reconciliation with zero infrastructure.
+Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override
+with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and
+you have daily reconciliation with no service in the middle and no account.
+
+Keep as much history as you like, but give the check a window — it only needs
+the recent past, and every loaded record costs memory (~300 bytes, measured):
+
+```bash
+inventory-doctor snapshot check shopify-store-a --window 30
+```
+
+A year of daily snapshots of a 5,000-SKU shop is ~0.5 GB on disk; loading all
+of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB
+however long the history grows. The listing is cheap either way — only the
+snapshots inside the window are read.
 
 ## The eight diagnostic rules
 

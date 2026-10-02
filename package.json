@@ -1,6 +1,6 @@
 {
   "name": "inventory-doctor",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Multi-source inventory sync diagnostics — find the SKUs you're overselling without knowing it.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",

@@ -54,7 +54,7 @@ const program = new Command();
 program
   .name('inventory-doctor')
   .description('Multi-source inventory sync diagnostics — find the SKUs you are overselling without knowing it.')
-  .version('0.2.2');
+  .version('0.2.3');
 
 program
   .command('diff')
@@ -219,12 +219,18 @@ snapshot
 
 snapshot
   .command('check')
-  .description('Time-series check across all snapshots of a source: catch SKUs silently zeroed between snapshots (needs ≥3 snapshots).')
+  .description('Time-series check across snapshots of a source: catch SKUs silently zeroed between snapshots (needs ≥3 snapshots).')
   .argument('<name>', 'snapshot group name')
-  .action(async (name: string) => {
+  .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
+  .action(async (name: string, opts: { window?: string }) => {
     try {
-      const result = await runSnapshotCheck(name);
-      process.stdout.write(`snapshot history for "${name}": ${result.snapshots.length} snapshots\n`);
+      // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
+      const checkOptions = opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) };
+      const result = await runSnapshotCheck(name, checkOptions);
+      const scope = result.windowed
+        ? `${result.snapshots.length} of ${result.totalSnapshots} snapshots (windowed)`
+        : `${result.snapshots.length} snapshots`;
+      process.stdout.write(`snapshot history for "${name}": ${scope}\n`);
       for (const s of result.snapshots) {
         process.stdout.write(`  ${s.id}  ${s.recordCount} records\n`);
       }

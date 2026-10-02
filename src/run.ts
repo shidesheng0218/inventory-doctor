@@ -12,7 +12,7 @@ import { ShopifyClient } from './adapters/shopify-api/client.js';
 import { fetchInventory } from './adapters/shopify-api/fetch-inventory.js';
 import { WooClient } from './adapters/woocommerce/client.js';
 import { fetchWooInventory } from './adapters/woocommerce/fetch-inventory.js';
-import { listSnapshots, loadSnapshot } from './snapshots.js';
+import { listSnapshotStubs, loadSnapshot } from './snapshots.js';
 import { nightlyZero } from './core/rules/nightly-zero.js';
 
 export type SourceInput =
@@ -236,24 +236,55 @@ export async function inventoryHealth(
   };
 }
 
+export interface SnapshotCheckOptions {
+  // Load only the newest N snapshots.
+  //
+  // Retention and detection are different questions: history can be kept for a
+  // year while the rule only cares about the recent past. Every loaded record
+  // costs ~300 bytes in memory, so comparing 365 daily snapshots of a
+  // 5,000-SKU shop would need ~510 MB. A window keeps a long-running install
+  // flat instead of growing until it runs out of memory.
+  maxSnapshots?: number;
+}
+
 export interface SnapshotCheckResult {
   name: string;
+  /** The snapshots that were actually read (the window, when one applied). */
   snapshots: Array<{ id: string; savedAt: string; recordCount: number }>;
+  /** Total snapshots on disk, whether or not they were loaded. */
+  totalSnapshots: number;
+  /** True when only the newest part of the history was loaded. */
+  windowed: boolean;
   findings: Finding[];
 }
 
-// Time-series check over every saved snapshot of one source. Runs only the
+// Time-series check over the saved snapshots of one source. Runs only the
 // nightly-zero rule — the cross-source rules are meaningless when every
 // "source" is the same inventory at a different time.
-export async function runSnapshotCheck(name: string): Promise<SnapshotCheckResult> {
-  const infos = await listSnapshots(name);
-  if (infos.length === 0) {
+export async function runSnapshotCheck(
+  name: string,
+  options: SnapshotCheckOptions = {},
+): Promise<SnapshotCheckResult> {
+  // Listing only: counting records would read every file, which is exactly the
+  // cost a window is meant to avoid.
+  const stubs = await listSnapshotStubs(name);
+  if (stubs.length === 0) {
     throw new Error(`No snapshots for "${name}". Save one first: inventory-doctor snapshot save <source>`);
   }
-  const loaded = await Promise.all(infos.map((i) => loadSnapshot(`${name}@${i.id}`)));
+
+  const requested = options.maxSnapshots;
+  const max =
+    typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+      ? Math.floor(requested)
+      : undefined;
+  const window = max !== undefined && stubs.length > max ? stubs.slice(-max) : stubs;
+
+  const loaded = await Promise.all(window.map((s) => loadSnapshot(`${name}@${s.id}`)));
   return {
     name,
-    snapshots: infos.map(({ id, savedAt, recordCount }) => ({ id, savedAt, recordCount })),
+    snapshots: loaded.map((s) => ({ id: s.id, savedAt: s.savedAt, recordCount: s.recordCount })),
+    totalSnapshots: stubs.length,
+    windowed: window.length < stubs.length,
     findings: nightlyZero(loaded.flatMap((s) => s.records)),
   };
 }
