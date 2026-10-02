@@ -4,6 +4,7 @@ import { distinctSources } from './match.js';
 import { normalizeSku } from './normalize.js';
 import { skuMismatch } from './rules/sku-mismatch.js';
 import { oversellRisk } from './rules/oversell-risk.js';
+import { oversold } from './rules/oversold.js';
 import { blankVsZero } from './rules/blank-vs-zero.js';
 import { barcodeCrosscheck } from './rules/barcode-crosscheck.js';
 import { computeHealthSummary, healthScore, quantityDrift } from './rules/quantity-drift.js';
@@ -13,6 +14,7 @@ import { nightlyZero } from './rules/nightly-zero.js';
 export const RULES = [
   'sku-mismatch',
   'oversell-risk',
+  'oversold',
   'blank-vs-zero',
   'barcode-crosscheck',
   'quantity-drift',
@@ -27,6 +29,7 @@ type RuleFn = (records: InventoryRecord[], options: DiagnoseOptions) => Finding[
 const RULE_FNS: Record<RuleId, RuleFn> = {
   'sku-mismatch': (r) => skuMismatch(r),
   'oversell-risk': (r, o) => oversellRisk(r, o),
+  oversold: (r) => oversold(r),
   'blank-vs-zero': (r) => blankVsZero(r),
   'barcode-crosscheck': (r) => barcodeCrosscheck(r),
   'quantity-drift': (r, o) => quantityDrift(r, o),

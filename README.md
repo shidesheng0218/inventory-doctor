@@ -81,7 +81,7 @@ The tool never writes to any API. The fix is a file you can read, diff, and re-c
 
 ## Snapshots — time-series diagnosis
 
-A single diff compares two snapshots taken now. Saving snapshots over time unlocks the seventh rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
+A single diff compares two snapshots taken now. Saving snapshots over time unlocks the time-series rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
 
 ```bash
 inventory-doctor snapshot save store-a.csv            # or: --store store-a via snapshot save store:store-a
@@ -94,12 +94,13 @@ inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specifi
 
 Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and you have daily reconciliation with zero infrastructure.
 
-## The seven diagnostic rules
+## The eight diagnostic rules
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
 | `sku-mismatch` | Case-only / whitespace / prefix-suffix SKU variants, orphan SKUs, one-to-many duplicates within one source | info → critical |
 | `oversell-risk` | Quantity ≤ 0 on one side but > 0 on the other; "continue selling when out of stock" with empty stock; drift beyond threshold | warning → critical |
+| `oversold` | Negative available quantity — orders already accepted for stock that does not exist. Needs no second source, so a single store gets this on day one | critical |
 | `blank-vs-zero` | A **blank** quantity cell vs an explicit `0` — the classic "bulk import wiped my inventory" root cause | critical |
 | `barcode-crosscheck` | Same barcode, different SKUs across sources — silent mapping misconfiguration | critical |
 | `quantity-drift` | Overall sync health: % exact / minor drift / severe drift / unmatched → health score 0–100 | info |

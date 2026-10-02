@@ -15,11 +15,11 @@ export { parseSourceArg };
 const SOURCE_DESC = 'CSV file path, "store:<name>" for a configured Shopify store, "woo:<name>" for a configured WooCommerce store, or "snapshot:<name>[@<id>]" for a saved snapshot';
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: 'inventory-doctor', version: '0.2.1' });
+  const server = new McpServer({ name: 'inventory-doctor', version: '0.2.2' });
 
   server.tool(
     'diff_inventory',
-    'Compare inventory across two sources (CSV files and/or configured Shopify stores) and report sync problems (SKU mismatches, oversell risk, blank-vs-zero cells, barcode conflicts, drift). Findings are capped (maxFindings) to keep the payload small; use explain_sku for per-SKU follow-ups.',
+    'Compare inventory across two sources (CSV files and/or configured Shopify stores) and report sync problems (SKU mismatches, oversell risk, oversold stock, blank-vs-zero cells, barcode conflicts, drift). Findings are capped (maxFindings) to keep the payload small; use explain_sku for per-SKU follow-ups.',
     {
       sourceA: z.string().describe(SOURCE_DESC),
       sourceB: z.string().describe(SOURCE_DESC),

@@ -1,12 +1,14 @@
 import type { Finding, InventoryRecord } from '../types.js';
 import {
   aggregateQuantity,
+  distinctSources,
   groupByCanonicalSku,
   hasLocationDimension,
   perLocationQuantities,
   sourcePairs,
   type SkuBucket,
 } from '../match.js';
+import { normalizeSku } from '../normalize.js';
 import { DEFAULT_DIAGNOSE_OPTIONS, type DiagnoseOptions } from '../types.js';
 
 // R2 — SKUs you may be overselling right now:
@@ -24,8 +26,38 @@ export function oversellRisk(
   options: DiagnoseOptions = DEFAULT_DIAGNOSE_OPTIONS,
 ): Finding[] {
   const findings: Finding[] = [];
+  const pairs = sourcePairs(records);
+  const multipleSources = distinctSources(records).length >= 2;
 
-  for (const [a, b] of sourcePairs(records)) {
+  // Continue-selling policy (Shopify "Continue selling when out of stock").
+  // This needs no second source — it is true of one store right now — so it is
+  // checked once per (sku, location) instead of only for SKUs present in BOTH
+  // sources (and once per matched pair, which a three-source diff duplicated).
+  // Collected separately and appended after the comparisons so the report's
+  // ordering within a severity does not shift for existing users.
+  const policyFindings: Finding[] = [];
+  const policySeen = new Set<string>();
+  for (const r of records) {
+    if (r.meta['inventoryPolicy'] !== 'continue') continue;
+    if (r.quantity === null || r.quantity > 0) continue;
+    if (r.sku === null) continue;
+    const key = normalizeSku(r.sku).canonical + '\u0000' + (r.location ?? '');
+    if (policySeen.has(key)) continue;
+    policySeen.add(key);
+
+    policyFindings.push({
+      rule: 'oversell-risk',
+      severity: 'warning',
+      sku: r.sku,
+      message: `"${r.sku}" in ${r.source} allows overselling ("continue selling when out of stock") with quantity ${r.quantity}`,
+      detail: { source: r.source, location: r.location, quantity: r.quantity, inventoryPolicy: 'continue' },
+      suggestion: multipleSources
+        ? 'Confirm this oversell setting is intentional, and make sure the other source does not also count this stock.'
+        : 'Confirm this oversell setting is intentional: with continue-selling on, orders are accepted for stock you do not have.',
+    });
+  }
+
+  for (const [a, b] of pairs) {
     const mapA = groupByCanonicalSku(records, a);
     const mapB = groupByCanonicalSku(records, b);
 
@@ -34,24 +66,6 @@ export function oversellRisk(
       if (!bucketB) continue; // orphans are R1's job
       const rawSku = bucketA.records[0]?.sku ?? canonical;
 
-      // Continue-selling policy (Shopify "Continue selling when out of stock").
-      for (const bucket of [bucketA, bucketB]) {
-        for (const r of bucket.records) {
-          const policy = r.meta['inventoryPolicy'];
-          const qty = r.quantity;
-          if (policy === 'continue' && qty !== null && qty <= 0) {
-            findings.push({
-              rule: 'oversell-risk',
-              severity: 'warning',
-              sku: r.sku,
-              message: `"${r.sku ?? canonical}" in ${r.source} allows overselling ("continue selling when out of stock") with quantity ${qty}`,
-              detail: { source: r.source, location: r.location, quantity: qty, inventoryPolicy: policy },
-              suggestion: 'Confirm this oversell setting is intentional, and make sure the other source does not also count this stock.',
-            });
-          }
-        }
-      }
-
       if (hasLocationDimension(bucketA) && hasLocationDimension(bucketB)) {
         compareByLocation(findings, rawSku, a, bucketA, b, bucketB, options);
       } else {
@@ -59,6 +73,8 @@ export function oversellRisk(
       }
     }
   }
+
+  findings.push(...policyFindings);
 
   return findings;
 }
