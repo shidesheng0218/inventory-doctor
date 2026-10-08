@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="1012" viewBox="0 0 860 1012" role="img" aria-label="inventory-doctor terminal report">
+  <rect width="860" height="1012" rx="12" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="859" height="1011" rx="12" fill="none" stroke="#30363d"/>
+  <path d="M0 12a12 12 0 0 1 12-12h836a12 12 0 0 1 12 12v24H0z" fill="#161b22"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f56"/><circle cx="42" cy="18" r="6" fill="#ffbd2e"/><circle cx="62" cy="18" r="6" fill="#27c93f"/>
+  <text x="430" y="23" fill="#8b949e" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="12" text-anchor="middle">inventory-doctor diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv</text>
+  <text xml:space="preserve" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+    <tspan x="26" y="52"><tspan fill="#c9d1d9">loaded shopify-store-a: 13 records (handle + SKU + quantity columns → Shopify product export)</tspan></tspan>
+    <tspan x="26" y="72"><tspan fill="#c9d1d9">loaded shopify-store-b: 12 records (handle + SKU + quantity columns → Shopify product export)</tspan></tspan>
+    <tspan x="26" y="132"><tspan fill="#e6edf3">inventory-doctor — sync diagnosis</tspan><tspan fill="#c9d1d9"></tspan></tspan>
+    <tspan x="26" y="152"><tspan fill="#30363d">============================================================</tspan></tspan>
+    <tspan x="26" y="172"><tspan fill="#c9d1d9">Sources: shopify-store-a  vs  shopify-store-b</tspan></tspan>
+    <tspan x="26" y="192"><tspan fill="#8b949e">  shopify-store-a: 13 records</tspan></tspan>
+    <tspan x="26" y="212"><tspan fill="#8b949e">  shopify-store-b: 12 records</tspan></tspan>
+    <tspan x="26" y="252"><tspan fill="#f0883e">Sync health score: 33/100</tspan><tspan fill="#c9d1d9"></tspan></tspan>
+    <tspan x="26" y="272"><tspan fill="#8b949e">  exact match: 5 · minor drift: 0 · severe drift: 4 · unmatched: 6 (of 15)</tspan></tspan>
+    <tspan x="26" y="332"><tspan fill="#ff7b72">CRITICAL (8)</tspan><tspan fill="#c9d1d9"></tspan></tspan>
+    <tspan x="26" y="352"><tspan fill="#ff7b72">[CRITICAL]</tspan><tspan fill="#c9d1d9"> SKU &quot;DUP-100&quot; appears 2 times in shopify-store-a with different quantities</tspan></tspan>
+    <tspan x="26" y="372"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">rule:</tspan><tspan fill="#79c0ff"> sku-mismatch</tspan></tspan>
+    <tspan x="26" y="392"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">fix:</tspan><tspan fill="#9fb0c0">  Deduplicate &quot;DUP-100&quot; in shopify-store-a: one SKU should map to exactly one</tspan></tspan>
+    <tspan x="26" y="412"><tspan fill="#8b949e">           quantity per location.</tspan></tspan>
+    <tspan x="26" y="432"><tspan fill="#ff7b72">[CRITICAL]</tspan><tspan fill="#c9d1d9"> &quot;OVER-1&quot; is out of stock in shopify-store-a (0) but shows 8 available in</tspan></tspan>
+    <tspan x="26" y="452"><tspan fill="#8b949e">           shopify-store-b — you may be selling stock you don't have</tspan></tspan>
+    <tspan x="26" y="472"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">rule:</tspan><tspan fill="#79c0ff"> oversell-risk</tspan></tspan>
+    <tspan x="26" y="492"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">fix:</tspan><tspan fill="#9fb0c0">  Push the real quantity from shopify-store-b to shopify-store-a, or pause the</tspan></tspan>
+    <tspan x="26" y="512"><tspan fill="#8b949e">           listing in shopify-store-a.</tspan></tspan>
+    <tspan x="26" y="532"><tspan fill="#ff7b72">[CRITICAL]</tspan><tspan fill="#c9d1d9"> &quot;BLANK-1&quot; has a BLANK quantity cell in shopify-store-a (not &quot;0&quot;) while</tspan></tspan>
+    <tspan x="26" y="552"><tspan fill="#8b949e">           shopify-store-b tracks a real quantity — an import may read this as 0 and wipe the stock</tspan></tspan>
+    <tspan x="26" y="572"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">rule:</tspan><tspan fill="#79c0ff"> blank-vs-zero</tspan></tspan>
+    <tspan x="26" y="592"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">fix:</tspan><tspan fill="#9fb0c0">  Write an explicit &quot;0&quot; if the item is truly out of stock, or fill in the real</tspan></tspan>
+    <tspan x="26" y="612"><tspan fill="#8b949e">           quantity. Never leave quantity cells blank before a bulk import.</tspan></tspan>
+    <tspan x="26" y="632"><tspan fill="#8b949e">  … +5 more in this section</tspan></tspan>
+    <tspan x="26" y="672"><tspan fill="#d29922">WARNING (5)</tspan><tspan fill="#c9d1d9"></tspan></tspan>
+    <tspan x="26" y="692"><tspan fill="#d29922">[WARN]     </tspan><tspan fill="#c9d1d9">SKU differs only by letter case: &quot;ABC-123&quot; (shopify-store-a) vs &quot;abc-123&quot;</tspan></tspan>
+    <tspan x="26" y="712"><tspan fill="#8b949e">           (shopify-store-b)</tspan></tspan>
+    <tspan x="26" y="732"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">rule:</tspan><tspan fill="#79c0ff"> sku-mismatch</tspan></tspan>
+    <tspan x="26" y="752"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">fix:</tspan><tspan fill="#9fb0c0">  Unify SKU casing across sources — many sync tools treat SKUs</tspan></tspan>
+    <tspan x="26" y="772"><tspan fill="#8b949e">           case-sensitively.</tspan></tspan>
+    <tspan x="26" y="792"><tspan fill="#8b949e">  … +4 more in this section</tspan></tspan>
+    <tspan x="26" y="832"><tspan fill="#58a6ff">INFO (3)</tspan><tspan fill="#c9d1d9"></tspan></tspan>
+    <tspan x="26" y="852"><tspan fill="#58a6ff">[INFO]     </tspan><tspan fill="#c9d1d9">Possible prefix/suffix variant: &quot;GHI-789&quot; (shopify-store-a) vs &quot;SHOP-GHI-789&quot;</tspan></tspan>
+    <tspan x="26" y="872"><tspan fill="#8b949e">           (shopify-store-b)</tspan></tspan>
+    <tspan x="26" y="892"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">rule:</tspan><tspan fill="#79c0ff"> sku-mismatch</tspan></tspan>
+    <tspan x="26" y="912"><tspan fill="#8b949e">           </tspan><tspan fill="#6e7681">fix:</tspan><tspan fill="#9fb0c0">  If these are the same product, configure your sync tool to strip the</tspan></tspan>
+    <tspan x="26" y="932"><tspan fill="#8b949e">           prefix/suffix, or rename one SKU.</tspan></tspan>
+    <tspan x="26" y="952"><tspan fill="#8b949e">  … +2 more in this section</tspan></tspan>
+  </text>
+</svg>

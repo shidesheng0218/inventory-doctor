@@ -1,129 +1,76 @@
+<div align="center">
+
 # inventory-doctor
 
-Multi-source inventory sync diagnostics — **find the SKUs you're overselling without knowing it.**
+**Find the SKUs you're overselling without knowing it.**
 
-Compare two inventory snapshots (CSV exports or live Shopify stores) and get a report of everything that doesn't line up: SKU mismatches, oversell risk, blank cells masquerading as zeros, barcode conflicts, and more.
+Compare two inventory snapshots — CSV exports or live Shopify / WooCommerce stores — and get a report of everything that doesn't line up.
 
-**Your data never leaves your machine.** CSV files are parsed locally; Shopify API calls go directly from your computer to your own stores over HTTPS. There is no server, no telemetry, no upload.
+[![CI](https://github.com/shidesheng0218/inventory-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/shidesheng0218/inventory-doctor/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/inventory-doctor?color=cb3837)](https://www.npmjs.com/package/inventory-doctor)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![node](https://img.shields.io/node/v/inventory-doctor)](package.json)
+[![MCP](https://img.shields.io/badge/MCP-server-8a2be2)](#mcp-server--use-it-from-claude-code-and-other-agents)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-**Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
+<a href="fixtures/expected-report.md"><img src="docs/assets/demo.svg" alt="inventory-doctor terminal report: sync health score 33/100, eight critical findings across sku-mismatch, oversell-risk and blank-vs-zero" width="860"></a>
+
+<sub>Real output, not a mock-up — every line above is produced by <code>inventory-doctor diff</code> on the fixtures in this repo, and the full report is committed as <a href="fixtures/expected-report.md">fixtures/expected-report.md</a>, verified by the test suite.</sub>
+
+</div>
+
+---
+
+## Why this exists
+
+**Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use.
+
+**Your data never leaves your machine.** CSV files are parsed locally; Shopify API calls go directly from your computer to your own stores over HTTPS. No server, no telemetry, no upload, no account.
+
+The whole comparison is a pure function — `(records) => findings` — so you can read exactly what is being judged. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
 
 ## Who this is for
 
-* **Developers and agencies** run the engine directly: the CLI and the MCP
-  server are the whole diagnostic core, MIT, no account, no service in the
-  middle. Wire `snapshot save` + `snapshot check` into your own cron or CI and you
-  own the schedule.
-* **Merchants and teams who would rather not run infrastructure** get the
-  same engine behind a hosted app (in development): it schedules the daily
-  check, keeps the history, compares the store against a 3PL/ERP export, and
-  alerts when something breaks.
+| | |
+| --- | --- |
+| **Developers & agencies** | Run the engine directly. The CLI and the MCP server *are* the diagnostic core — MIT, no account, no service in the middle. Wire `snapshot save` + `snapshot check` into your own cron or CI and you own the schedule. |
+| **Merchants & teams who'd rather not run infrastructure** | The same engine behind a hosted app (in development): it schedules the daily check, keeps the history, compares the store against a 3PL/ERP export, and alerts when something breaks. |
 
-The split is deliberate and one-way: the engine stays open so you can audit
-exactly what is being judged and run it yourself; the hosted app adds the
-boring parts (scheduling, storage, alerting, multi-source plumbing).
+The split is deliberate and one-way: the engine stays open so you can audit exactly what is being judged and run it yourself; the hosted app adds the boring parts (scheduling, storage, alerting, multi-source plumbing).
 
-## Install & run
+## Quick start
+
+**Zero credentials — two CSV exports you already have:**
 
 ```bash
-npm install          # or: pnpm install
-npm run build        # produces dist/cli.js (with shebang)
-
-# zero-credential path: two CSV exports
-npx tsx src/cli.ts diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv
-# or after build / npm link:
-inventory-doctor diff a.csv b.csv
+npx -y inventory-doctor diff store-a.csv store-b.csv
 ```
 
-## What it looks like
+Exit code is `1` when critical findings exist, so this drops straight into CI or cron.
 
-Running `inventory-doctor diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv` against the bundled sample files (which deliberately contain one of every problem):
-
-```
-inventory-doctor — sync diagnosis
-============================================================
-Sources: shopify-store-a  vs  shopify-store-b
-  shopify-store-a: 13 records
-  shopify-store-b: 12 records
-
-Sync health score: 33/100
-  exact match: 5 · minor drift: 0 · severe drift: 4 · unmatched: 6 (of 15)
-
-CRITICAL (8)
-------------------------------------------------------------
-[CRITICAL] SKU "DUP-100" appears 2 times in shopify-store-a with different quantities
-[CRITICAL] SKU "ORPHAN-A" exists in shopify-store-a but is missing from shopify-store-b
-[CRITICAL] "OVER-1" is out of stock in shopify-store-a (0) but shows 8 available in
-           shopify-store-b — you may be selling stock you don't have
-[CRITICAL] "BLANK-1" has a BLANK quantity cell in shopify-store-a (not "0") while
-           shopify-store-b tracks a real quantity — an import may read this as 0
-[CRITICAL] Barcode 9999999 maps to 2 different SKUs across sources
-           ("BC-A" in shopify-store-a vs "BC-B" in shopify-store-b)
-...
-
-WARNING (5)
-------------------------------------------------------------
-[WARN]     SKU differs only by letter case: "ABC-123" (a) vs "abc-123" (b)
-[WARN]     SKU matches only after removing whitespace/invisible characters
-[WARN]     "CONT-1" allows overselling ("continue selling when out of stock") with quantity 0
-...
-
-INFO (3)
-------------------------------------------------------------
-[INFO]     Possible prefix/suffix variant: "GHI-789" (a) vs "SHOP-GHI-789" (b)
-[INFO]     Sync health score: 33/100 — 5 exact, 0 minor drift, 4 severe drift, 6 unmatched
-[INFO]     "UNTRACKED-1" has inventory tracking OFF in shopify-store-a but is
-           stock-managed in shopify-store-b
-```
-
-The full output is checked in as [`fixtures/expected-report.md`](fixtures/expected-report.md) — it's a living document verified by the test suite.
-
-The exit code is `1` when critical findings exist, so you can wire this into CI or a cron job.
-
-## Fix export — from finding to fix
-
-`--fix-export` turns critical findings into a Shopify-importable inventory CSV that brings the **second** source in line with the **first** (the source of truth):
+**From source (to hack on the engine):**
 
 ```bash
-inventory-doctor diff a.csv b.csv --fix-export fix.csv
-# → fix direction: bring "b" in line with "a" (first source = source of truth)
-# → review fix.csv, verify it, then import it into b
+git clone https://github.com/shidesheng0218/inventory-doctor
+cd inventory-doctor && npm install        # or: pnpm install
+npm run build                             # produces dist/cli.js (with shebang)
+node dist/cli.js diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv
 ```
 
-**Watch the direction.** With mixed flags the "first" source is not necessarily the first flag you typed — precedence is: positional files, then `--csv`, then `--store`/`--woo`, then `--baseline`. The run always prints the direction before writing, so check that line.
+## What you can diagnose depends on what you have
 
-The tool never writes to any API. The fix is a file you can read, diff, and re-check before importing — the run prints the exact verify command (`inventory-doctor diff <truth-source> fix.csv`), so you can prove the fix would heal the report first. An auditable fix, not a silent mutation. Critical findings that an inventory import cannot fix (e.g. a SKU missing from the target entirely) are called out explicitly instead of being silently dropped.
+This is the single most useful thing to know before you start:
 
-## Snapshots — time-series diagnosis
+| What you have | Rules that can fire |
+| --- | --- |
+| **One store, one snapshot** | `oversold` — negative availability, i.e. orders already accepted for stock that isn't there |
+| **One store over time** (≥3 saved snapshots) | + `nightly-zero` — "stocked for days, then reads 0", the silent-wipe pattern |
+| **Two systems** (Shopify vs 3PL / ERP / marketplace export) | + `sku-mismatch`, `barcode-crosscheck`, `quantity-drift`, `untracked`, and the cross-source half of `oversell-risk` |
+| **Two systems, both carrying locations** | + location-level drift and stockouts, compared per (SKU, location) |
 
-A single diff compares two snapshots taken now. Saving snapshots over time unlocks the time-series rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
+Two *different systems* means exactly that. Comparing a store against yesterday's export of the same store makes each day a "source" — a SKU that legitimately sold out gets reported as a critical oversell emergency. Use `snapshot check` for one store over time; use `diff` for two systems.
 
-```bash
-inventory-doctor snapshot save store-a.csv            # or: --store store-a via snapshot save store:store-a
-inventory-doctor snapshot list shopify-store-a
-inventory-doctor snapshot check shopify-store-a       # needs ≥3 snapshots; exit 1 on critical
-
-inventory-doctor diff now.csv --baseline shopify-store-a          # latest snapshot
-inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specific one
-```
-
-Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override
-with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and
-you have daily reconciliation with no service in the middle and no account.
-
-Keep as much history as you like, but give the check a window — it only needs
-the recent past, and every loaded record costs memory (~300 bytes, measured):
-
-```bash
-inventory-doctor snapshot check shopify-store-a --window 30
-```
-
-A year of daily snapshots of a 5,000-SKU shop is ~0.5 GB on disk; loading all
-of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB
-however long the history grows. The listing is cheap either way — only the
-snapshots inside the window are read.
-
-## The eight diagnostic rules
+## The eight rules
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
@@ -136,21 +83,66 @@ snapshots inside the window are read.
 | `untracked` | Inventory tracking disabled in one source while another manages stock | info |
 | `nightly-zero` | Time-series across saved snapshots: a SKU with a stable positive history suddenly reading 0 ("silently zeroed overnight"), vanishing, or dropping suspiciously fast | warning → critical |
 
-**Blank vs "0" is a first-class distinction.** CSV parsers love turning empty cells into 0; this tool keeps `quantity: null` strictly separate from `quantity: 0` all the way through.
+**Blank vs `0` is a first-class distinction.** CSV parsers love turning empty cells into 0; this tool keeps `quantity: null` strictly separate from `quantity: 0` all the way through.
+
+### Multi-location aware
+
+When both sources carry a location dimension (inventory CSV long/wide format, or the API), quantities are compared per *(SKU, location)*: a location-level stockout or drift is reported at that location and never hidden by summing across locations, and a SKU stocked at two locations is **not** mistaken for a duplicate. When one side has no location dimension (product CSV), its per-SKU quantity is compared against the other side's cross-location sum.
+
+Worked examples: [`fixtures/shopify-inventory-c.csv`](fixtures/shopify-inventory-c.csv) / [`-d.csv`](fixtures/shopify-inventory-d.csv) (long format) and [`fixtures/shopify-inventory-wide-e.csv`](fixtures/shopify-inventory-wide-e.csv) / [`-f.csv`](fixtures/shopify-inventory-wide-f.csv) (wide format).
+
+## Fix export — from finding to fix
+
+`--fix-export` turns critical findings into a Shopify-importable inventory CSV that brings the **second** source in line with the **first** (the source of truth):
+
+```bash
+inventory-doctor diff a.csv b.csv --fix-export fix.csv
+# → fix direction: bring "b" in line with "a" (first source = source of truth)
+# → review fix.csv, verify it, then import it into b
+```
+
+> **Watch the direction.** With mixed flags the "first" source is not necessarily the first flag you typed — precedence is: positional files, then `--csv`, then `--store`/`--woo`, then `--baseline`. The run always prints the direction before writing, so check that line.
+
+The tool never writes to any API. The fix is a file you can read, diff, and re-check before importing — the run prints the exact verify command (`inventory-doctor diff <truth-source> fix.csv`), so you can prove the fix would heal the report first. An auditable fix, not a silent mutation. Critical findings that an inventory import cannot fix (e.g. a SKU missing from the target entirely) are called out explicitly instead of being silently dropped.
+
+## Snapshots — time-series diagnosis
+
+A single diff compares two snapshots taken now. Saving snapshots over time unlocks the time-series rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
+
+```bash
+inventory-doctor snapshot save store-a.csv                             # or a configured store: store:store-a
+inventory-doctor snapshot list shopify-store-a
+inventory-doctor snapshot check shopify-store-a                        # needs ≥3 snapshots; exit 1 on critical
+
+inventory-doctor diff now.csv --baseline shopify-store-a               # against the latest snapshot
+inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01    # against a specific one
+```
+
+Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and you have daily reconciliation with no service in the middle and no account.
+
+**Give the check a window.** History can be as long as you like, but the rule only needs the recent past, and every loaded record costs memory (~300 bytes, measured):
+
+```bash
+inventory-doctor snapshot check shopify-store-a --window 30
+```
+
+A year of daily snapshots of a 5,000-SKU shop is ~0.5 GB on disk; loading all of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB however long the history grows. The listing itself is cheap either way — only the snapshots inside the window are read.
 
 ## Supported inputs
 
-- **Shopify product CSV** — both header generations are recognized (`Variant SKU` *and* the current `SKU`, `Variant Inventory Qty` *and* `Inventory quantity`, etc.)
-- **Shopify inventory CSV** — both layouts: the long "All states" table (one row per variant × location) and the wide "Available" table (location names as column headers, inferred automatically)
-- **Anything else** — alias-based column probing (Amazon-style `seller-sku`/`quantity` TSVs work out of the box), plus explicit mapping when guessing fails:
+| Input | Notes |
+| --- | --- |
+| **Shopify product CSV** | Both header generations (`Variant SKU` *and* the current `SKU`, `Variant Inventory Qty` *and* `Inventory quantity`, …) |
+| **Shopify inventory CSV** | Both layouts: the long "All states" table (one row per variant × location) and the wide "Available" table (location names as column headers, inferred automatically) |
+| **Amazon-style / anything else** | Alias-based column probing (`seller-sku` / `quantity` TSVs work out of the box), plus explicit mapping when guessing fails |
+| **Shopify Admin API** | Live snapshots, static token or client credentials — see below |
+| **WooCommerce REST API** | Live snapshots — see below |
 
 ```bash
 inventory-doctor diff shopify.csv erp.csv --map sku="Item Code" --map quantity="Stock Count"
 ```
 
 SKU normalization (trim, case folding, full-width → half-width, zero-width character removal) is used **only for comparison** — reports always show your raw SKU values.
-
-**Multi-location aware.** When both sources carry a location dimension (inventory CSV long/wide, or the API), quantities are compared per (SKU, location): a location-level stockout or drift is reported at that location and never hidden by summing across locations, and a SKU stocked at two locations is *not* mistaken for a duplicate. When one side has no location dimension (product CSV), its per-SKU quantity is compared against the other side's cross-location sum. See `fixtures/shopify-inventory-c.csv` / `-d.csv` (long format) and `fixtures/shopify-inventory-wide-e.csv` / `-f.csv` (wide format) for worked examples.
 
 ## Shopify Admin API (optional)
 
@@ -175,7 +167,7 @@ inventory-doctor diff --store store-a --store store-b   # store vs store
 inventory-doctor diff --store store-a --csv b.csv       # mixed mode
 ```
 
-The same file can tune the diagnostic rules (all optional; CLI flags win over these):
+The same file tunes the diagnostic rules (all optional; CLI flags win):
 
 ```jsonc
 {
@@ -236,7 +228,7 @@ inventory-doctor diff woo-shop-export.csv --woo woo-shop
 
 Notes: HTTPS is enforced (Basic Auth over plain HTTP would leak credentials). `manage_stock: false` maps to "tracking off" (the `untracked` rule fires as usual), and `backorders: yes/notify` maps to "continue selling when out of stock". WooCommerce core has no multi-location inventory, so Woo sources have no location dimension.
 
-## MCP server (use it from Claude Code and other agents)
+## MCP server — use it from Claude Code and other agents
 
 Add to your `.mcp.json`:
 
@@ -255,20 +247,54 @@ Add to your `.mcp.json`:
 
 Three tools are registered:
 
-- `diff_inventory(sourceA, sourceB, configPath?, maxFindings?)` — full diagnosis, returns the JSON report. Findings are capped at `maxFindings` (default 100) so a large catalog cannot flood the agent's context; on truncation the payload carries `totalFindings` and points at `explain_sku` for the remainder.
-- `explain_sku(sku, sources, configPath?)` — one SKU's raw values and findings across all sources (for follow-up questions)
-- `inventory_health(sources, configPath?)` — lightweight health-score summary
+| Tool | What it does |
+| --- | --- |
+| `diff_inventory(sourceA, sourceB, configPath?, maxFindings?)` | Full diagnosis, returns the JSON report. Findings are capped at `maxFindings` (default 100) so a large catalogue cannot flood the agent's context; on truncation the payload carries `totalFindings` and points at `explain_sku` for the remainder. |
+| `explain_sku(sku, sources, configPath?)` | One SKU's raw values and findings across all sources (for follow-up questions). |
+| `inventory_health(sources, configPath?)` | Lightweight health-score summary. |
 
-Every source argument accepts either a **CSV file path**, **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars), or **`snapshot:<name>[@<id>]`** (a saved snapshot) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
+Every source argument accepts a **CSV file path**, **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars), or **`snapshot:<name>[@<id>]`** (a saved snapshot) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
 
-stdout is reserved for JSON-RPC; all logging goes to stderr.
+stdout is reserved for JSON-RPC; all logging goes to stderr (guarded by `npm run check:stdout`).
 
 ## Honest limitations
 
 - **Time-series needs saved snapshots.** `snapshot check` detects silent zeroing across history, but only over snapshots you actually saved — it cannot reconstruct the past before the first save.
 - **WooCommerce has no multi-location inventory** in core; per-location diagnosis on that side needs a CSV export from a multi-location plugin instead.
-- Amazon report headers vary by marketplace and report options; detection is best-effort via column aliases, and `--map` is the escape hatch.
-- Product CSVs carry no per-location inventory; multi-location diagnosis needs the inventory CSV export or the API.
+- **Amazon report headers vary** by marketplace and report options; detection is best-effort via column aliases, and `--map` is the escape hatch.
+- **Product CSVs carry no per-location inventory**; multi-location diagnosis needs the inventory CSV export or the API.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph sources["sources"]
+    SA["Shopify Admin API"]
+    WOO["WooCommerce REST"]
+    PC["Product CSV"]
+    IC["Inventory CSV<br/>(long & wide)"]
+    ANY["Amazon TSV / any<br/>aliased sheet"]
+  end
+
+  AD["<b>adapters/</b><br/>source → InventoryRecord[]<br/><i>auto-detects layout</i>"]
+  K["<b>core/</b> — pure functions<br/>8 rules + matching + normalization<br/><i>zero I/O, no network</i>"]
+  F["Finding[]"]
+  CLI["<b>CLI</b><br/>terminal · JSON · markdown"]
+  MCP["<b>MCP server</b><br/>3 tools for agents"]
+  FIX["<b>--fix-export</b><br/>importable CSV"]
+
+  SA --> AD
+  WOO --> AD
+  PC --> AD
+  IC --> AD
+  ANY --> AD
+  AD --> K --> F
+  F --> CLI
+  F --> MCP
+  F --> FIX
+```
+
+`src/core/` is a pure-function diagnostic kernel (`(records: InventoryRecord[]) => Finding[]`, zero I/O); `src/adapters/` turns CSVs and APIs into that intermediate representation; the CLI and MCP layers only parse arguments and format output. **Adding a new source means adding one adapter — no refactor.**
 
 ## Development
 
@@ -279,4 +305,8 @@ npm run build        # tsc + shebang
 npm run check:stdout # guards the MCP stdout discipline
 ```
 
-Architecture: `src/core/` is a pure-function diagnostic kernel (`(records: InventoryRecord[]) => Finding[]`, zero I/O); `src/adapters/` turn CSVs and the Shopify API into that intermediate representation; CLI and MCP layers only parse arguments and format output. Adding a new source (WooCommerce, BigCommerce, …) means adding one adapter, no refactor.
+CI runs the suite on Node 22 and 24. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE) — use it, fork it, ship it inside your own product.
