@@ -29,7 +29,7 @@ inputs:
   version:
     description: npm version of inventory-doctor to run
     required: false
-    default: 0.3.0
+    default: '0.4.0'
 
 outputs:
   report:
