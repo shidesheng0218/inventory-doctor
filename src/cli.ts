@@ -55,7 +55,7 @@ const program = new Command();
 program
   .name('inventory-doctor')
   .description('Multi-source inventory sync diagnostics — find the SKUs you are overselling without knowing it.')
-  .version('0.2.3');
+  .version('0.3.0');
 
 program
   .command('diff')
