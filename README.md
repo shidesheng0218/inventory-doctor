@@ -123,6 +123,35 @@ of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB
 however long the history grows. The listing is cheap either way — only the
 snapshots inside the window are read.
 
+## GitHub Action
+
+Run a diff in CI with the composite action from this repo (published to the
+marketplace):
+
+```yaml
+- uses: shidesheng0218/inventory-doctor@v0.3.0
+  with:
+    source-a: exports/store-a.csv        # or store:<name> / snapshot:<name>
+    source-b: exports/store-b.csv
+    # config: path/to/inventory-doctor.json   # only if not in a default location
+    # format: terminal                       # terminal | markdown | html
+    # extra-args: --drift-abs 5              # any extra CLI flags
+```
+
+`source-a` and `source-b` are required; everything else is optional.
+Credentials referenced as `"env:VAR_NAME"` in `inventory-doctor.json` are read
+from the step environment — pass them in as secrets, e.g.
+`STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}` (also `STORE_B_CLIENT_ID`,
+`STORE_B_SECRET`, `WOO_CK`, `WOO_CS`, `SHOPIFY_CLIENT_SECRET`).
+
+The report is written to `inventory-doctor-report.txt` and uploaded as an
+artifact; the file path is also exposed as the `report` output. When critical
+findings exist the CLI exits 1 and the step — and therefore the job — goes
+red. Set `fail-on-critical: 'false'` to keep the workflow green and only
+collect the report. See `.github/workflows/example-inventory-check.yml` for a
+self-contained run (it diffs this repo's fixtures nightly, with
+`fail-on-critical: false` since the fixtures intentionally contain criticals).
+
 ## The eight diagnostic rules
 
 | Rule | What it catches | Severity |
