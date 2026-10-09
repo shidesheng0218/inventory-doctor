@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
 import { saveSnapshot, listSnapshots } from './snapshots.js';
 import { skuHistory } from './history.js';
+import { sendWebhook } from './notify.js';
+import { loadConfigIfExists } from './config.js';
 import type { ColumnMapping } from './adapters/csv/generic.js';
 import { renderTerminal } from './report/terminal.js';
 import { renderJson } from './report/json.js';
@@ -224,7 +226,8 @@ snapshot
   .description('Time-series check across snapshots of a source: catch SKUs silently zeroed between snapshots (needs ≥3 snapshots).')
   .argument('<name>', 'snapshot group name')
   .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
-  .action(async (name: string, opts: { window?: string }) => {
+  .option('--webhook <url>', 'POST a JSON alert here when critical findings exist (overrides notify.webhookUrl in config)')
+  .action(async (name: string, opts: { window?: string; webhook?: string }) => {
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
       const checkOptions = opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) };
@@ -248,8 +251,26 @@ snapshot
       for (const f of result.findings) {
         process.stdout.write(`[${f.severity.toUpperCase()}] ${f.message}\n           fix: ${f.suggestion}\n`);
       }
-      if (result.findings.some((f) => f.severity === 'critical')) {
+      const criticalFindings = result.findings.filter((f) => f.severity === 'critical');
+      if (criticalFindings.length > 0) {
         process.exitCode = 1;
+        // Critical-alert wiring sits behind a blanket catch: a webhook or
+        // config failure must never override the critical exit code above.
+        // Only criticals alert — warning-only runs stay silent (alert fatigue).
+        try {
+          const webhookUrl = opts.webhook ?? (await loadConfigIfExists())?.notify?.webhookUrl;
+          if (webhookUrl !== undefined) {
+            await sendWebhook(webhookUrl, {
+              name,
+              critical: criticalFindings.length,
+              warning: result.findings.length - criticalFindings.length,
+              findings: result.findings.map((f) => ({ severity: f.severity, message: f.message })),
+            });
+            process.stderr.write(`webhook alert sent to ${webhookUrl} (${criticalFindings.length} critical)\n`);
+          }
+        } catch (err) {
+          process.stderr.write(`warning: webhook alert failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
       }
     } catch (err) {
       process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);

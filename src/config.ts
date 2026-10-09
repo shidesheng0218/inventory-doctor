@@ -37,11 +37,17 @@ export interface RulesConfig {
   driftPctThreshold?: number;
 }
 
+// Notification targets. The CLI flag wins when both are set.
+export interface NotifyConfig {
+  webhookUrl?: string; // POST target for snapshot-check critical alerts
+}
+
 export interface AppConfig {
   stores: StoreConfig[];
   woocommerce?: WooStoreConfig[];
   rules?: RulesConfig;
   bundles?: BundleDef[]; // bundle kit definitions for the bundle-availability rule
+  notify?: NotifyConfig;
 }
 
 const DEFAULT_CONFIG_PATHS = [
@@ -77,6 +83,12 @@ export async function loadConfig(explicitPath?: string): Promise<AppConfig> {
   }
   if (parsed.bundles !== undefined) {
     validateBundles(parsed.bundles, path);
+  }
+  if (parsed.notify !== undefined) {
+    const webhookUrl = parsed.notify.webhookUrl;
+    if (webhookUrl !== undefined && typeof webhookUrl !== 'string') {
+      throw new Error(`Invalid config at ${path}: notify.webhookUrl must be a string.`);
+    }
   }
   return parsed;
 }

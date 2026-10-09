@@ -109,6 +109,27 @@ inventory-doctor diff now.csv --baseline shopify-store-a          # latest snaps
 inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specific one
 ```
 
+Alert when the check catches something critical — the check POSTs a JSON summary
+and still exits 1, whether or not the alert went through:
+
+```bash
+inventory-doctor snapshot check shopify-store-a --webhook https://hooks.slack.com/your-endpoint
+```
+
+```json
+{ "name": "shopify-store-a", "critical": 1, "warning": 0,
+  "findings": [{ "severity": "critical", "message": "\"SKU-1\" was stocked across 2 snapshots … but reads 0 in the latest" }] }
+```
+
+Only critical findings alert — a warning-only history stays silent, so the
+endpoint doesn't fatigue you into ignoring it. A failed send (network error,
+non-2xx) is a stderr warning and never changes the exit code. Set a default in
+`inventory-doctor.json` and the flag wins per-run:
+
+```json
+{ "stores": [ … ], "notify": { "webhookUrl": "https://hooks.slack.com/your-endpoint" } }
+```
+
 Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override
 with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and
 you have daily reconciliation with no service in the middle and no account.
