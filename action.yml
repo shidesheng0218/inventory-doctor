@@ -46,13 +46,10 @@ runs:
     - name: Run inventory-doctor diff
       id: diff
       shell: bash
-      env:
-        SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-        STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}
-        STORE_B_CLIENT_ID: ${{ secrets.STORE_B_CLIENT_ID }}
-        STORE_B_SECRET: ${{ secrets.STORE_B_SECRET }}
-        WOO_CK: ${{ secrets.WOO_CK }}
-        WOO_CS: ${{ secrets.WOO_CS }}
+      # NOTE: no `env:` block here on purpose — the `secrets` context is not
+      # available inside composite action definitions. Callers pass credential
+      # env vars through their own workflow/job `env:` (see README); those
+      # variables are inherited by this step.
       run: |
         CONFIG_ARG=""
         if [ -n "${{ inputs.config }}" ]; then

@@ -163,9 +163,18 @@ marketplace):
 
 `source-a` and `source-b` are required; everything else is optional.
 Credentials referenced as `"env:VAR_NAME"` in `inventory-doctor.json` are read
-from the step environment — pass them in as secrets, e.g.
-`STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}` (also `STORE_B_CLIENT_ID`,
-`STORE_B_SECRET`, `WOO_CK`, `WOO_CS`, `SHOPIFY_CLIENT_SECRET`).
+from the step environment — set them as env vars in your calling workflow
+(composite actions cannot reference the `secrets` context themselves), e.g.
+at job level:
+
+```yaml
+env:
+  STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}   # also STORE_B_CLIENT_ID,
+  STORE_B_SECRET: ${{ secrets.STORE_B_SECRET }} # STORE_B_SECRET, WOO_CK,
+  WOO_CK: ${{ secrets.WOO_CK }}                 # WOO_CS, SHOPIFY_CLIENT_SECRET
+  WOO_CS: ${{ secrets.WOO_CS }}
+  SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+```
 
 The report is written to `inventory-doctor-report.txt` and uploaded as an
 artifact; the file path is also exposed as the `report` output. When critical
