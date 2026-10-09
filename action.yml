@@ -51,17 +51,33 @@ runs:
       # env vars through their own workflow/job `env:` (see README); those
       # variables are inherited by this step.
       run: |
+        # npx resolves commands against the LOCAL project first. Inside a
+        # checkout of this very repo, npm 10 sees package.json's matching
+        # name+bin and runs a phantom local bin — but dist/ isn't in a fresh
+        # clone ("inventory-doctor: not found"). So: absolutize caller-relative
+        # file paths, then run npx from a neutral directory.
+        abs() { echo "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")"; }
+        SOURCES=()
+        for src in "${{ inputs.source-a }}" "${{ inputs.source-b }}"; do
+          if [ -f "$src" ]; then SOURCES+=("$(abs "$src")"); else SOURCES+=("$src"); fi
+        done
         CONFIG_ARG=""
         if [ -n "${{ inputs.config }}" ]; then
-          CONFIG_ARG="--config ${{ inputs.config }}"
+          if [ -f "${{ inputs.config }}" ]; then
+            CONFIG_ARG="--config $(abs "${{ inputs.config }}")"
+          else
+            CONFIG_ARG="--config ${{ inputs.config }}"
+          fi
         fi
         STATUS=0
+        RUN_DIR="$(mktemp -d)"
+        cd "$RUN_DIR"
         npx -y inventory-doctor@${{ inputs.version }} diff \
-          "${{ inputs.source-a }}" "${{ inputs.source-b }}" \
+          "${SOURCES[0]}" "${SOURCES[1]}" \
           --format "${{ inputs.format }}" \
           ${CONFIG_ARG} \
           ${{ inputs.extra-args }} \
-          > inventory-doctor-report.txt || STATUS=$?
+          > "$GITHUB_WORKSPACE/inventory-doctor-report.txt" || STATUS=$?
         echo "report=${GITHUB_WORKSPACE}/inventory-doctor-report.txt" >> "$GITHUB_OUTPUT"
         if [ "$STATUS" -eq 1 ] && [ "${{ inputs.fail-on-critical }}" != "true" ]; then
           echo "::warning::inventory-doctor found critical findings (fail-on-critical=false)"
