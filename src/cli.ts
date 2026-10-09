@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
 import { saveSnapshot, listSnapshots } from './snapshots.js';
+import { skuHistory } from './history.js';
 import type { ColumnMapping } from './adapters/csv/generic.js';
 import { renderTerminal } from './report/terminal.js';
 import { renderJson } from './report/json.js';
@@ -249,6 +250,32 @@ snapshot
       }
       if (result.findings.some((f) => f.severity === 'critical')) {
         process.exitCode = 1;
+      }
+    } catch (err) {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 2;
+    }
+  });
+
+snapshot
+  .command('history')
+  .description('Trace one SKU across the snapshots of a source: quantity at each snapshot. (blank) means a blank cell — distinct from 0.')
+  .argument('<name>', 'snapshot group name')
+  .argument('<sku>', 'SKU to trace (matched canonically: case/width-insensitive)')
+  .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
+  .action(async (name: string, sku: string, opts: { window?: string }) => {
+    try {
+      // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
+      const history = await skuHistory(sku, name, opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) });
+      if (!history.found) {
+        process.stdout.write(`no records for SKU "${sku}" in snapshot history "${name}"\n`);
+        return;
+      }
+      process.stdout.write(`history for "${history.sku}" (canonical: ${history.canonical}) in "${name}":\n`);
+      for (const p of history.points) {
+        const qty = p.quantity === null ? '(blank)' : String(p.quantity);
+        const loc = p.location === null ? '' : ` @ ${p.location}`;
+        process.stdout.write(`  ${p.snapshotId}  ${qty}${loc}\n`);
       }
     } catch (err) {
       process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { explainSku, inventoryHealth, parseSourceArg, runDiff } from './run.js';
+import { skuHistory } from './history.js';
 
 export { parseSourceArg };
 
@@ -74,6 +75,20 @@ export function createMcpServer(): McpServer {
     async ({ sources, configPath }) => {
       const health = await inventoryHealth(sources.map(parseSourceArg), { configPath });
       return { content: [{ type: 'text' as const, text: JSON.stringify(health, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'sku_history',
+    'Trace one SKU across the saved snapshots of a source: per-snapshot quantity series, expanded per location. quantity null means a blank cell (not zero), so "went to zero" vs "stopped being reported" stay distinguishable. found=false means the SKU never appears (points is empty).',
+    {
+      sku: z.string().describe('The SKU to trace (matched canonically: case/width-insensitive)'),
+      snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
+      maxSnapshots: z.number().int().min(1).optional().describe('Only load the newest N snapshots (default: all)'),
+    },
+    async ({ sku, snapshotName, maxSnapshots }) => {
+      const history = await skuHistory(sku, snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(history, null, 2) }] };
     },
   );
 
