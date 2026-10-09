@@ -154,7 +154,7 @@ collect the report. See `.github/workflows/example-inventory-check.yml` for a
 self-contained run (it diffs this repo's fixtures nightly, with
 `fail-on-critical: false` since the fixtures intentionally contain criticals).
 
-## The eight diagnostic rules
+## The nine diagnostic rules
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
@@ -166,6 +166,7 @@ self-contained run (it diffs this repo's fixtures nightly, with
 | `quantity-drift` | Overall sync health: % exact / minor drift / severe drift / unmatched → health score 0–100 | info |
 | `untracked` | Inventory tracking disabled in one source while another manages stock | info |
 | `nightly-zero` | Time-series across saved snapshots: a SKU with a stable positive history suddenly reading 0 ("silently zeroed overnight"), vanishing, or dropping suspiciously fast | warning → critical |
+| `bundle-availability` | A bundle (kit) listed sellable while its components can no longer support even one assembly; listed bundle qty drifting from what component stock supports; component missing from a source | warning → critical |
 
 **Blank vs "0" is a first-class distinction.** CSV parsers love turning empty cells into 0; this tool keeps `quantity: null` strictly separate from `quantity: 0` all the way through.
 
@@ -216,7 +217,12 @@ The same file can tune the diagnostic rules (all optional; CLI flags win over th
     "severityOverrides": { "blank-vs-zero": "warning" },
     "driftAbsThreshold": 10,                      // like --drift-abs
     "driftPctThreshold": 0.3                      // like --drift-pct
-  }
+  },
+  // Bundle kits for the bundle-availability rule (top level, not under "rules").
+  // computedMax = min over components of floor(componentQty / required), per source/location.
+  "bundles": [
+    { "sku": "GIFT-KIT", "components": [{ "sku": "KIT-A", "quantity": 1 }, { "sku": "KIT-B", "quantity": 2 }] }
+  ]
 }
 ```
 

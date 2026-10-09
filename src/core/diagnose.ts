@@ -10,6 +10,7 @@ import { barcodeCrosscheck } from './rules/barcode-crosscheck.js';
 import { computeHealthSummary, healthScore, quantityDrift } from './rules/quantity-drift.js';
 import { untracked } from './rules/untracked.js';
 import { nightlyZero } from './rules/nightly-zero.js';
+import { bundleAvailability } from './rules/bundle-availability.js';
 
 export const RULES = [
   'sku-mismatch',
@@ -20,6 +21,7 @@ export const RULES = [
   'quantity-drift',
   'untracked',
   'nightly-zero',
+  'bundle-availability',
 ] as const;
 
 export type RuleId = (typeof RULES)[number];
@@ -35,6 +37,7 @@ const RULE_FNS: Record<RuleId, RuleFn> = {
   'quantity-drift': (r, o) => quantityDrift(r, o),
   untracked: (r) => untracked(r),
   'nightly-zero': (r) => nightlyZero(r),
+  'bundle-availability': (r, o) => bundleAvailability(r, o),
 };
 
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };

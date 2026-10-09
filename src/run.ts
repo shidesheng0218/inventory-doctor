@@ -143,6 +143,7 @@ async function resolveDiagnoseOptions(
     ...(rules?.disable !== undefined ? { disabledRules: rules.disable } : {}),
     ...(rules?.ignoreSkus !== undefined ? { ignoreSkus: rules.ignoreSkus } : {}),
     ...(rules?.severityOverrides !== undefined ? { severityOverrides: rules.severityOverrides } : {}),
+    ...(config?.bundles !== undefined ? { bundles: config.bundles } : {}),
     ...options.diagnose, // explicit CLI flags last — they win
   };
 }

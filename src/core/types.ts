@@ -24,10 +24,24 @@ export interface Finding {
   suggestion: string; // what the merchant should do
 }
 
+// Bundle (kit) definition: how many of each component SKU it takes to
+// assemble one sellable bundle. Used by the bundle-availability rule.
+export interface BundleComponent {
+  sku: string;
+  quantity: number; // components needed per bundle, integer >= 1
+}
+
+export interface BundleDef {
+  sku: string; // the bundle's own SKU as listed for sale
+  components: BundleComponent[];
+}
+
 export interface DiagnoseOptions {
   // quantity-drift / oversell thresholds: flag when |a-b| > max(abs, pct * max(|a|,|b|))
   driftAbsThreshold: number;
   driftPctThreshold: number; // 0..1
+  // Bundle kit definitions (usually from inventory-doctor.json top-level "bundles").
+  bundles?: BundleDef[]; // empty/undefined → bundle-availability stays silent
   // Rule-level configuration (usually from inventory-doctor.json "rules").
   disabledRules?: string[]; // rule ids to skip entirely
   ignoreSkus?: string[]; // glob patterns ("GIFT-*") matched against the CANONICAL sku
