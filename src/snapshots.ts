@@ -116,6 +116,23 @@ export async function loadSnapshot(ref: string): Promise<LoadedSnapshot> {
   return readSnapshot(name, match.id, match.path);
 }
 
+// The newest N snapshots of a source, fully loaded. Listing stays cheap; only
+// the files inside the window are read. maxSnapshots (when a finite positive
+// number) keeps long histories flat in memory. Throws the same guidance as
+// loadSnapshot when nothing is saved yet.
+export async function loadSnapshotWindow(name: string, maxSnapshots?: number): Promise<LoadedSnapshot[]> {
+  const stubs = await listSnapshotStubs(name);
+  if (stubs.length === 0) {
+    throw new Error(`No snapshots for "${name}". Save one first: inventory-doctor snapshot save <source>`);
+  }
+  const max =
+    typeof maxSnapshots === 'number' && Number.isFinite(maxSnapshots) && maxSnapshots > 0
+      ? Math.floor(maxSnapshots)
+      : undefined;
+  const window = max !== undefined && stubs.length > max ? stubs.slice(-max) : stubs;
+  return Promise.all(window.map((s) => loadSnapshot(`${name}@${s.id}`)));
+}
+
 async function readSnapshot(name: string, id: string, path: string): Promise<LoadedSnapshot> {
   const content = await readFile(path, 'utf8');
   const savedAt = savedAtFromId(id);

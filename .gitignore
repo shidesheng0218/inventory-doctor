@@ -1,3 +1,6 @@
 node_modules/
 dist/
 inventory-doctor.json
+
+# isolated agent workspaces
+.worktrees/

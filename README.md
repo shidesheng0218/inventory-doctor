@@ -8,6 +8,8 @@ Compare two inventory snapshots (CSV exports or live Shopify stores) and get a r
 
 **Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
 
+**Built for agentic commerce.** AI-buyer traffic is growing fast — agent-initiated store visits are up ~393% year over year — and AI buyers are cancellation-intolerant: one oversell is a failed order and a merchant record that buying agents learn to avoid, not a disappointed human who might come back. Meanwhile every sync engine in your stack is *writing* to your inventory around the clock. Every sync-app user needs an independent audit layer, and inventory-doctor is the read-only reconciliation layer built to be exactly that. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full landscape.
+
 ## Who this is for
 
 * **Developers and agencies** run the engine directly: the CLI and the MCP
@@ -107,6 +109,27 @@ inventory-doctor diff now.csv --baseline shopify-store-a          # latest snaps
 inventory-doctor diff now.csv --baseline shopify-store-a@2026-09-01  # a specific one
 ```
 
+Alert when the check catches something critical — the check POSTs a JSON summary
+and still exits 1, whether or not the alert went through:
+
+```bash
+inventory-doctor snapshot check shopify-store-a --webhook https://hooks.slack.com/your-endpoint
+```
+
+```json
+{ "name": "shopify-store-a", "critical": 1, "warning": 0,
+  "findings": [{ "severity": "critical", "message": "\"SKU-1\" was stocked across 2 snapshots … but reads 0 in the latest" }] }
+```
+
+Only critical findings alert — a warning-only history stays silent, so the
+endpoint doesn't fatigue you into ignoring it. A failed send (network error,
+non-2xx) is a stderr warning and never changes the exit code. Set a default in
+`inventory-doctor.json` and the flag wins per-run:
+
+```json
+{ "stores": [ … ], "notify": { "webhookUrl": "https://hooks.slack.com/your-endpoint" } }
+```
+
 Snapshots live as local JSONL files under `~/.local/share/inventory-doctor/snapshots/<name>/` (override
 with `INVENTORY_DOCTOR_SNAPSHOT_DIR`). Put `snapshot save` + `snapshot check` on a cron and
 you have daily reconciliation with no service in the middle and no account.
@@ -123,7 +146,36 @@ of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB
 however long the history grows. The listing is cheap either way — only the
 snapshots inside the window are read.
 
-## The eight diagnostic rules
+## GitHub Action
+
+Run a diff in CI with the composite action from this repo (published to the
+marketplace):
+
+```yaml
+- uses: shidesheng0218/inventory-doctor@v0.3.0
+  with:
+    source-a: exports/store-a.csv        # or store:<name> / snapshot:<name>
+    source-b: exports/store-b.csv
+    # config: path/to/inventory-doctor.json   # only if not in a default location
+    # format: terminal                       # terminal | markdown | html
+    # extra-args: --drift-abs 5              # any extra CLI flags
+```
+
+`source-a` and `source-b` are required; everything else is optional.
+Credentials referenced as `"env:VAR_NAME"` in `inventory-doctor.json` are read
+from the step environment — pass them in as secrets, e.g.
+`STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}` (also `STORE_B_CLIENT_ID`,
+`STORE_B_SECRET`, `WOO_CK`, `WOO_CS`, `SHOPIFY_CLIENT_SECRET`).
+
+The report is written to `inventory-doctor-report.txt` and uploaded as an
+artifact; the file path is also exposed as the `report` output. When critical
+findings exist the CLI exits 1 and the step — and therefore the job — goes
+red. Set `fail-on-critical: 'false'` to keep the workflow green and only
+collect the report. See `.github/workflows/example-inventory-check.yml` for a
+self-contained run (it diffs this repo's fixtures nightly, with
+`fail-on-critical: false` since the fixtures intentionally contain criticals).
+
+## The nine diagnostic rules
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
@@ -135,6 +187,7 @@ snapshots inside the window are read.
 | `quantity-drift` | Overall sync health: % exact / minor drift / severe drift / unmatched → health score 0–100 | info |
 | `untracked` | Inventory tracking disabled in one source while another manages stock | info |
 | `nightly-zero` | Time-series across saved snapshots: a SKU with a stable positive history suddenly reading 0 ("silently zeroed overnight"), vanishing, or dropping suspiciously fast | warning → critical |
+| `bundle-availability` | A bundle (kit) listed sellable while its components can no longer support even one assembly; listed bundle qty drifting from what component stock supports; component missing from a source | warning → critical |
 
 **Blank vs "0" is a first-class distinction.** CSV parsers love turning empty cells into 0; this tool keeps `quantity: null` strictly separate from `quantity: 0` all the way through.
 
@@ -185,7 +238,12 @@ The same file can tune the diagnostic rules (all optional; CLI flags win over th
     "severityOverrides": { "blank-vs-zero": "warning" },
     "driftAbsThreshold": 10,                      // like --drift-abs
     "driftPctThreshold": 0.3                      // like --drift-pct
-  }
+  },
+  // Bundle kits for the bundle-availability rule (top level, not under "rules").
+  // computedMax = min over components of floor(componentQty / required), per source/location.
+  "bundles": [
+    { "sku": "GIFT-KIT", "components": [{ "sku": "KIT-A", "quantity": 1 }, { "sku": "KIT-B", "quantity": 2 }] }
+  ]
 }
 ```
 

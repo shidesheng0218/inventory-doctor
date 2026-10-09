@@ -1,0 +1,81 @@
+name: inventory-doctor
+description: Diff two inventory snapshots (CSV files, Shopify/WooCommerce stores, or saved snapshots) and upload the diagnostic report as an artifact. Exits 1 when critical findings exist, failing the job.
+author: shidesheng0218
+branding:
+  icon: activity
+  color: orange
+
+inputs:
+  source-a:
+    description: First source — CSV path, `store:<name>`, or `snapshot:<name>[@<id>]`
+    required: true
+  source-b:
+    description: Second source — CSV path, `store:<name>`, or `snapshot:<name>[@<id>]`
+    required: true
+  config:
+    description: Path to inventory-doctor.json (only needed outside default locations)
+    required: false
+  format:
+    description: Report format — terminal, markdown, or html
+    required: false
+    default: terminal
+  extra-args:
+    description: Additional CLI flags appended verbatim to the diff command
+    required: false
+  fail-on-critical:
+    description: Whether critical findings fail the step (CLI exit code 1)
+    required: false
+    default: 'true'
+  version:
+    description: npm version of inventory-doctor to run
+    required: false
+    default: '0.4.0'
+
+outputs:
+  report:
+    description: Path to the generated report file
+    value: ${{ steps.diff.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Run inventory-doctor diff
+      id: diff
+      shell: bash
+      env:
+        SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+        STORE_A_TOKEN: ${{ secrets.STORE_A_TOKEN }}
+        STORE_B_CLIENT_ID: ${{ secrets.STORE_B_CLIENT_ID }}
+        STORE_B_SECRET: ${{ secrets.STORE_B_SECRET }}
+        WOO_CK: ${{ secrets.WOO_CK }}
+        WOO_CS: ${{ secrets.WOO_CS }}
+      run: |
+        CONFIG_ARG=""
+        if [ -n "${{ inputs.config }}" ]; then
+          CONFIG_ARG="--config ${{ inputs.config }}"
+        fi
+        STATUS=0
+        npx -y inventory-doctor@${{ inputs.version }} diff \
+          "${{ inputs.source-a }}" "${{ inputs.source-b }}" \
+          --format "${{ inputs.format }}" \
+          ${CONFIG_ARG} \
+          ${{ inputs.extra-args }} \
+          > inventory-doctor-report.txt || STATUS=$?
+        echo "report=${GITHUB_WORKSPACE}/inventory-doctor-report.txt" >> "$GITHUB_OUTPUT"
+        if [ "$STATUS" -eq 1 ] && [ "${{ inputs.fail-on-critical }}" != "true" ]; then
+          echo "::warning::inventory-doctor found critical findings (fail-on-critical=false)"
+          exit 0
+        fi
+        exit "$STATUS"
+
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v5
+      with:
+        name: inventory-doctor-report
+        path: inventory-doctor-report.txt
+        if-no-files-found: ignore

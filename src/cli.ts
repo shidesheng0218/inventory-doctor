@@ -3,16 +3,20 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
 import { saveSnapshot, listSnapshots } from './snapshots.js';
+import { skuHistory } from './history.js';
+import { sendWebhook } from './notify.js';
+import { loadConfigIfExists } from './config.js';
 import type { ColumnMapping } from './adapters/csv/generic.js';
 import { renderTerminal } from './report/terminal.js';
 import { renderJson } from './report/json.js';
 import { renderMarkdown } from './report/markdown.js';
+import { renderHtml } from './report/html.js';
 import { buildFixExport } from './report/fix-export.js';
 
 // stdout discipline: all CLI output goes through process.stdout.write, so the
 // MCP stdio transport can never be polluted by a stray print.
 
-type OutputFormat = 'terminal' | 'json' | 'markdown';
+type OutputFormat = 'terminal' | 'json' | 'markdown' | 'html';
 
 function parseMapping(values: string[] | undefined): ColumnMapping {
   const mapping: ColumnMapping = {};
@@ -54,7 +58,7 @@ const program = new Command();
 program
   .name('inventory-doctor')
   .description('Multi-source inventory sync diagnostics — find the SKUs you are overselling without knowing it.')
-  .version('0.2.3');
+  .version('0.4.0');
 
 program
   .command('diff')
@@ -65,7 +69,7 @@ program
   .option('--woo <name>', 'configured WooCommerce store (mix with --store/--csv)', collect, [])
   .option('--csv <path>', 'CSV file (mix with --store)', collect, [])
   .option('--config <path>', 'path to inventory-doctor.json')
-  .option('--format <format>', 'output format: terminal | json | markdown', 'terminal')
+  .option('--format <format>', 'output format: terminal | json | markdown | html', 'terminal')
   .option('--map <field=header>', 'column mapping for unrecognized CSV files', collect, [])
   .option('--drift-abs <n>', 'absolute quantity drift threshold', (v) => Number(v))
   .option('--drift-pct <n>', 'percentage quantity drift threshold (0-1)', (v) => Number(v))
@@ -117,7 +121,7 @@ program
 
       const format = opts.format as OutputFormat;
       const output =
-        format === 'json' ? renderJson(report) : format === 'markdown' ? renderMarkdown(report) + '\n' : renderTerminal(report);
+        format === 'json' ? renderJson(report) : format === 'markdown' ? renderMarkdown(report) + '\n' : format === 'html' ? renderHtml(report) + '\n' : renderTerminal(report);
       process.stdout.write(output);
 
       if (typeof opts.fixExport === 'string') {
@@ -222,7 +226,8 @@ snapshot
   .description('Time-series check across snapshots of a source: catch SKUs silently zeroed between snapshots (needs ≥3 snapshots).')
   .argument('<name>', 'snapshot group name')
   .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
-  .action(async (name: string, opts: { window?: string }) => {
+  .option('--webhook <url>', 'POST a JSON alert here when critical findings exist (overrides notify.webhookUrl in config)')
+  .action(async (name: string, opts: { window?: string; webhook?: string }) => {
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
       const checkOptions = opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) };
@@ -246,8 +251,52 @@ snapshot
       for (const f of result.findings) {
         process.stdout.write(`[${f.severity.toUpperCase()}] ${f.message}\n           fix: ${f.suggestion}\n`);
       }
-      if (result.findings.some((f) => f.severity === 'critical')) {
+      const criticalFindings = result.findings.filter((f) => f.severity === 'critical');
+      if (criticalFindings.length > 0) {
         process.exitCode = 1;
+        // Critical-alert wiring sits behind a blanket catch: a webhook or
+        // config failure must never override the critical exit code above.
+        // Only criticals alert — warning-only runs stay silent (alert fatigue).
+        try {
+          const webhookUrl = opts.webhook ?? (await loadConfigIfExists())?.notify?.webhookUrl;
+          if (webhookUrl !== undefined) {
+            await sendWebhook(webhookUrl, {
+              name,
+              critical: criticalFindings.length,
+              warning: result.findings.length - criticalFindings.length,
+              findings: result.findings.map((f) => ({ severity: f.severity, message: f.message })),
+            });
+            process.stderr.write(`webhook alert sent (${criticalFindings.length} critical findings)\n`);
+          }
+        } catch (err) {
+          process.stderr.write(`warning: webhook alert failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 2;
+    }
+  });
+
+snapshot
+  .command('history')
+  .description('Trace one SKU across the snapshots of a source: quantity at each snapshot. (blank) means a blank cell — distinct from 0.')
+  .argument('<name>', 'snapshot group name')
+  .argument('<sku>', 'SKU to trace (matched canonically: case/width-insensitive)')
+  .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
+  .action(async (name: string, sku: string, opts: { window?: string }) => {
+    try {
+      // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
+      const history = await skuHistory(sku, name, opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) });
+      if (!history.found) {
+        process.stdout.write(`no records for SKU "${sku}" in snapshot history "${name}"\n`);
+        return;
+      }
+      process.stdout.write(`history for "${history.sku}" (canonical: ${history.canonical}) in "${name}":\n`);
+      for (const p of history.points) {
+        const qty = p.quantity === null ? '(blank)' : String(p.quantity);
+        const loc = p.location === null ? '' : ` @ ${p.location}`;
+        process.stdout.write(`  ${p.snapshotId}  ${qty}${loc}\n`);
       }
     } catch (err) {
       process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
