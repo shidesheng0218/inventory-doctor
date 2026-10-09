@@ -8,6 +8,8 @@ Compare two inventory snapshots (CSV exports or live Shopify stores) and get a r
 
 **Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
 
+**Built for agentic commerce.** AI-buyer traffic is growing fast — agent-initiated store visits are up ~393% year over year — and AI buyers are cancellation-intolerant: one oversell is a failed order and a merchant record that buying agents learn to avoid, not a disappointed human who might come back. Meanwhile every sync engine in your stack is *writing* to your inventory around the clock. Every sync-app user needs an independent audit layer, and inventory-doctor is the read-only reconciliation layer built to be exactly that. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full landscape.
+
 ## Who this is for
 
 * **Developers and agencies** run the engine directly: the CLI and the MCP
