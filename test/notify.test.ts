@@ -127,19 +127,25 @@ describe('sendWebhook', () => {
     expect(JSON.parse(req.body)).toEqual(payload);
   });
 
-  it('throws on non-2xx responses', async () => {
+  it('throws on non-2xx responses without leaking the URL', async () => {
     const failing = createServer((req, res) => {
       res.writeHead(500);
       res.end('boom');
     });
     await new Promise<void>((resolve) => failing.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(failing.address() as AddressInfo).port}`;
-    await expect(sendWebhook(url, payload)).rejects.toThrow(/500/);
+    const err: unknown = await sendWebhook(url, payload).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/500/);
+    expect((err as Error).message).not.toContain(url);
     await new Promise<void>((resolve) => failing.close(() => resolve()));
   });
 
-  it('throws when the server is unreachable', async () => {
-    await expect(sendWebhook('http://127.0.0.1:1/hook', payload)).rejects.toThrow();
+  it('throws when the server is unreachable, without leaking the URL', async () => {
+    const url = 'http://127.0.0.1:1/hook';
+    const err: unknown = await sendWebhook(url, payload).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain(url);
   });
 
   it('throws when the request exceeds timeoutMs', async () => {
@@ -151,10 +157,13 @@ describe('snapshot check --webhook', () => {
   it('sends one alert on critical findings and still exits 1', async () => {
     await seed([20, 20, 0]); // nightly-zero critical: stable stock, cliff to 0
 
-    const { status, stdout } = await runCli(['snapshot', 'check', NAME, '--webhook', `${baseUrl}/hook`]);
+    const { status, stdout, stderr } = await runCli(['snapshot', 'check', NAME, '--webhook', `${baseUrl}/hook`]);
 
     expect(status).toBe(1);
     expect(stdout).toContain('CRITICAL');
+    expect(stderr).toContain(`webhook alert sent (1 critical findings)`);
+    // The webhook URL is a bearer secret — it must never reach stderr (CI logs).
+    expect(stderr).not.toContain(baseUrl);
     expect(requests).toHaveLength(1);
     const body = JSON.parse((requests[0] as CapturedRequest).body) as Record<string, unknown>;
     expect(body['name']).toBe(NAME);
@@ -169,6 +178,7 @@ describe('snapshot check --webhook', () => {
 
     expect(status).toBe(1);
     expect(stderr).toMatch(/webhook/i);
+    expect(stderr).not.toContain('http://127.0.0.1:1');
   });
 
   it('does not send on warning-only findings', async () => {

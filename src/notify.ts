@@ -26,8 +26,17 @@ export async function sendWebhook(
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`webhook POST to ${url} failed with HTTP ${response.status}`);
+      throw new Error(`webhook POST failed with HTTP ${response.status}`);
     }
+  } catch (err) {
+    // The webhook URL is often itself the bearer secret (Slack incoming
+    // webhooks), so it must never surface in an error message that the CLI
+    // prints to stderr.
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith('webhook POST failed')) throw err;
+    const safe = message.split(url).join('[redacted]');
+    const name = err instanceof Error ? err.name : 'Error';
+    throw new Error(`webhook POST failed: ${name}: ${safe}`);
   } finally {
     clearTimeout(timer);
   }

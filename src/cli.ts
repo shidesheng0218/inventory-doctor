@@ -266,7 +266,7 @@ snapshot
               warning: result.findings.length - criticalFindings.length,
               findings: result.findings.map((f) => ({ severity: f.severity, message: f.message })),
             });
-            process.stderr.write(`webhook alert sent to ${webhookUrl} (${criticalFindings.length} critical)\n`);
+            process.stderr.write(`webhook alert sent (${criticalFindings.length} critical findings)\n`);
           }
         } catch (err) {
           process.stderr.write(`warning: webhook alert failed: ${err instanceof Error ? err.message : String(err)}\n`);
