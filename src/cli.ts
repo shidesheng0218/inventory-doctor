@@ -7,12 +7,13 @@ import type { ColumnMapping } from './adapters/csv/generic.js';
 import { renderTerminal } from './report/terminal.js';
 import { renderJson } from './report/json.js';
 import { renderMarkdown } from './report/markdown.js';
+import { renderHtml } from './report/html.js';
 import { buildFixExport } from './report/fix-export.js';
 
 // stdout discipline: all CLI output goes through process.stdout.write, so the
 // MCP stdio transport can never be polluted by a stray print.
 
-type OutputFormat = 'terminal' | 'json' | 'markdown';
+type OutputFormat = 'terminal' | 'json' | 'markdown' | 'html';
 
 function parseMapping(values: string[] | undefined): ColumnMapping {
   const mapping: ColumnMapping = {};
@@ -65,7 +66,7 @@ program
   .option('--woo <name>', 'configured WooCommerce store (mix with --store/--csv)', collect, [])
   .option('--csv <path>', 'CSV file (mix with --store)', collect, [])
   .option('--config <path>', 'path to inventory-doctor.json')
-  .option('--format <format>', 'output format: terminal | json | markdown', 'terminal')
+  .option('--format <format>', 'output format: terminal | json | markdown | html', 'terminal')
   .option('--map <field=header>', 'column mapping for unrecognized CSV files', collect, [])
   .option('--drift-abs <n>', 'absolute quantity drift threshold', (v) => Number(v))
   .option('--drift-pct <n>', 'percentage quantity drift threshold (0-1)', (v) => Number(v))
@@ -117,7 +118,7 @@ program
 
       const format = opts.format as OutputFormat;
       const output =
-        format === 'json' ? renderJson(report) : format === 'markdown' ? renderMarkdown(report) + '\n' : renderTerminal(report);
+        format === 'json' ? renderJson(report) : format === 'markdown' ? renderMarkdown(report) + '\n' : format === 'html' ? renderHtml(report) + '\n' : renderTerminal(report);
       process.stdout.write(output);
 
       if (typeof opts.fixExport === 'string') {
