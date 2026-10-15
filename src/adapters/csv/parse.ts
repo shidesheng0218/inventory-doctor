@@ -25,11 +25,22 @@ export function parseCsvContent(content: string): ParsedCsv {
 // "0" via quantityRaw. `isBlank` is the CSV-only signal that the blank-vs-zero
 // rule keys on — an API source never sets it (a null quantity there means
 // "not tracked", not "empty cell").
+//
+// Thousands separators: "1,234" is a common ERP export shape and must read as
+// 1234, not 1. Only the unambiguous grouped form (-?\d{1,3}(,\d{3})+) is
+// stripped — "1,5" / "12,34" (possible decimal-comma) are left alone so they
+// stay null and surface as unreadable rather than being silently misread.
+const THOUSANDS_RE = /^-?\d{1,3}(,\d{3})+$/;
+
 export function parseQuantity(raw: string | undefined): { quantity: number | null; quantityRaw: string; isBlank: boolean } {
   const quantityRaw = raw ?? '';
   const isBlank = quantityRaw.trim() === '';
   if (isBlank) return { quantity: null, quantityRaw, isBlank };
-  const n = Number(quantityRaw.trim());
+
+  let text = quantityRaw.trim();
+  if (THOUSANDS_RE.test(text)) text = text.replace(/,/g, '');
+
+  const n = Number(text);
   if (!Number.isFinite(n)) return { quantity: null, quantityRaw, isBlank };
   return { quantity: Math.trunc(n), quantityRaw, isBlank };
 }

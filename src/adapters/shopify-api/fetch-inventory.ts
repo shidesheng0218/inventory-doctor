@@ -26,10 +26,33 @@ const INVENTORY_SNAPSHOT_QUERY = /* GraphQL */ `
                 quantity
               }
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+// A variant with more than 20 locations would be silently truncated by the
+// main query (inventoryLevels(first: 20) returns no error, just a capped
+// list). Multi-location is exactly the scenario this tool exists for, so when
+// a variant reports hasNextPage on its levels we page the rest in explicitly.
+const INVENTORY_LEVELS_PAGE_QUERY = /* GraphQL */ `
+  query InventoryLevelsPage($itemId: ID!, $cursor: String) {
+    inventoryItem(id: $itemId) {
+      id
+      inventoryLevels(first: 250, after: $cursor, includeInactive: true) {
+        nodes {
+          location { id name }
+          quantities(names: ["available", "on_hand", "committed", "incoming"]) {
+            name
+            quantity
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
 `;
@@ -44,6 +67,11 @@ interface InventoryLevelNode {
   quantities: QuantityNode[];
 }
 
+interface PageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
 interface VariantNode {
   sku: string | null;
   barcode: string | null;
@@ -53,15 +81,45 @@ interface VariantNode {
   inventoryItem: {
     id: string;
     tracked: boolean;
-    inventoryLevels: { nodes: InventoryLevelNode[] };
+    inventoryLevels: { nodes: InventoryLevelNode[]; pageInfo: PageInfo };
   } | null;
 }
 
 interface SnapshotResponse {
   productVariants: {
     nodes: VariantNode[];
-    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    pageInfo: PageInfo;
   };
+}
+
+interface LevelsPageResponse {
+  inventoryItem: {
+    id: string;
+    inventoryLevels: { nodes: InventoryLevelNode[]; pageInfo: PageInfo };
+  } | null;
+}
+
+// Follow a variant's inventoryLevels pagination past the first page of 20.
+// Only called when the main query reports hasNextPage for that variant.
+async function fetchRemainingLevels(
+  client: ShopifyClient,
+  itemId: string,
+  startCursor: string | null,
+  already: InventoryLevelNode[],
+): Promise<InventoryLevelNode[]> {
+  const all = [...already];
+  let cursor = startCursor;
+  while (cursor !== null) {
+    const data = await client.graphql<LevelsPageResponse>(INVENTORY_LEVELS_PAGE_QUERY, {
+      itemId,
+      cursor,
+    });
+    const levels = data.inventoryItem?.inventoryLevels;
+    if (!levels) break;
+    all.push(...levels.nodes);
+    cursor = levels.pageInfo.hasNextPage ? levels.pageInfo.endCursor : null;
+  }
+  return all;
 }
 
 // Page through every variant (cursor-based, cursors are opaque — never
@@ -89,7 +147,15 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
       const meta: Record<string, string> = {};
       if (variant.inventoryPolicy) meta['inventoryPolicy'] = variant.inventoryPolicy.toLowerCase();
 
-      const levels = variant.inventoryItem?.inventoryLevels.nodes ?? [];
+      let levels = variant.inventoryItem?.inventoryLevels.nodes ?? [];
+      // A variant with >20 locations is truncated by the main query's
+      // inventoryLevels(first: 20). Page the remainder in rather than silently
+      // dropping locations — multi-location is the core scenario.
+      const levelsPageInfo = variant.inventoryItem?.inventoryLevels.pageInfo;
+      const itemId = variant.inventoryItem?.id;
+      if (levelsPageInfo?.hasNextPage && itemId) {
+        levels = await fetchRemainingLevels(client, itemId, levelsPageInfo.endCursor, levels);
+      }
       if (levels.length === 0) {
         const qty = variant.inventoryQuantity;
         records.push({

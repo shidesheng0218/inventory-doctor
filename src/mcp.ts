@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { explainSku, inventoryHealth, parseSourceArg, runDiff } from './run.js';
+import { explainSku, inventoryHealth, parseSourceArg, runDiff, runSnapshotCheck } from './run.js';
 import { skuHistory } from './history.js';
+import { buildFixExport } from './report/fix-export.js';
 
 export { parseSourceArg };
 
@@ -89,6 +90,44 @@ export function createMcpServer(): McpServer {
     async ({ sku, snapshotName, maxSnapshots }) => {
       const history = await skuHistory(sku, snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
       return { content: [{ type: 'text' as const, text: JSON.stringify(history, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'snapshot_check',
+    'Time-series diagnosis over the saved snapshots of one source: catches a SKU that was stocked for days and is suddenly zeroed or missing ("silently zeroed overnight") — the pattern a one-off diff cannot see. Needs ≥3 saved snapshots.',
+    {
+      snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
+      maxSnapshots: z.number().int().min(1).optional().describe('Only load the newest N snapshots (default: all)'),
+    },
+    async ({ snapshotName, maxSnapshots }) => {
+      const result = await runSnapshotCheck(snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    },
+  );
+
+  server.tool(
+    'fix_export',
+    'Turn the critical findings of a two-source diff into a Shopify-importable inventory CSV that brings the SECOND source in line with the FIRST (the source of truth). Returns the CSV as text — review it before importing; nothing is written anywhere. direction reminds you which side is the source of truth.',
+    {
+      sourceA: z.string().describe(`${SOURCE_DESC} — this is the SOURCE OF TRUTH the other side is aligned to`),
+      sourceB: z.string().describe(`${SOURCE_DESC} — this side receives the fix`),
+      configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+    },
+    async ({ sourceA, sourceB, configPath }) => {
+      const { report, sources } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath });
+      const records = sources.flatMap((s) => s.records);
+      const fix = buildFixExport(report, records);
+      const payload = {
+        direction: `align "${fix.targetSource}" (sourceB) to "${report.sources[0]}" (sourceA, the source of truth)`,
+        fixRows: fix.rows.length,
+        note:
+          fix.rows.length === 0
+            ? 'No importable fixes — critical findings either have no safe write or affect the truth side.'
+            : 'Review this CSV, then import it into the target source. Verify first: diff sourceA against this CSV.',
+        csv: fix.csv,
+      };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
     },
   );
 

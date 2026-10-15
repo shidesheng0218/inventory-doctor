@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -79,6 +79,34 @@ export async function listSnapshots(sourceName: string): Promise<SnapshotInfo[]>
     infos.push({ id, path, savedAt: savedAtFromId(id), recordCount });
   }
   return infos;
+}
+
+export interface PruneResult {
+  kept: number;
+  removed: number;
+  removedIds: string[];
+}
+
+// Delete all but the newest `keep` snapshots of a source. Snapshots are meant
+// to run on a cron forever; without a retention step the directory grows
+// without bound (~0.5 GB/yr for a 5,000-SKU shop). keep defaults to a value
+// that still satisfies the >=3-snapshot minimum the time-series rule needs.
+// Uses stubs (directory listing only) so pruning a long history does not read
+// every file just to delete most of them.
+export async function pruneSnapshots(sourceName: string, keep = 30): Promise<PruneResult> {
+  const stubs = await listSnapshotStubs(sourceName);
+  const keepN = Number.isFinite(keep) && keep > 0 ? Math.floor(keep) : 30;
+  const toRemove = stubs.length > keepN ? stubs.slice(0, stubs.length - keepN) : [];
+  const removedIds: string[] = [];
+  for (const stub of toRemove) {
+    try {
+      await unlink(stub.path);
+      removedIds.push(stub.id);
+    } catch {
+      // A file that vanished between listing and delete is not an error.
+    }
+  }
+  return { kept: stubs.length - removedIds.length, removed: removedIds.length, removedIds };
 }
 
 // ref resolution: a file path, "<name>@<id-prefix>", or "<name>" (latest).

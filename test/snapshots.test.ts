@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listSnapshots, loadSnapshot, saveSnapshot } from '../src/snapshots.js';
+import { listSnapshots, loadSnapshot, pruneSnapshots, saveSnapshot } from '../src/snapshots.js';
 import { rec } from './helpers.js';
 
 let dir: string;
@@ -82,5 +82,26 @@ describe('snapshot storage', () => {
     const { appendFile } = await import('node:fs/promises');
     await appendFile(saved.path, '{not json\n');
     await expect(loadSnapshot('s')).rejects.toThrow(/Corrupt snapshot file .*line 2/);
+  });
+
+  it('prunes to the newest N snapshots and is idempotent', async () => {
+    const mk = (n: number) => [rec({ source: 'p', sku: 'SKU-1', quantity: n })];
+    for (let i = 0; i < 5; i++) {
+      await saveSnapshot('p', mk(i), new Date(Date.UTC(2026, 8, 1, 8, 0, i))); // distinct ids, UTC
+    }
+    expect(await listSnapshots('p')).toHaveLength(5);
+
+    const r = await pruneSnapshots('p', 3);
+    expect(r.kept).toBe(3);
+    expect(r.removed).toBe(2);
+
+    const remaining = await listSnapshots('p');
+    expect(remaining).toHaveLength(3);
+    // The two OLDEST were removed; the newest three survive.
+    expect(remaining.map((s) => s.id)).toEqual(['2026-09-01T08-00-02', '2026-09-01T08-00-03', '2026-09-01T08-00-04']);
+
+    // Running again with the same keep count removes nothing.
+    const again = await pruneSnapshots('p', 3);
+    expect(again.removed).toBe(0);
   });
 });

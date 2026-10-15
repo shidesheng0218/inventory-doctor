@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
-import { saveSnapshot, listSnapshots } from './snapshots.js';
+import { saveSnapshot, listSnapshots, pruneSnapshots } from './snapshots.js';
 import { skuHistory } from './history.js';
 import { sendWebhook } from './notify.js';
 import { loadConfigIfExists } from './config.js';
@@ -219,6 +219,27 @@ snapshot
     for (const i of infos) {
       process.stdout.write(`${name}@${i.id}  ${i.recordCount} records  ${i.path}\n`);
     }
+  });
+
+snapshot
+  .command('prune')
+  .description('Delete all but the newest snapshots of a source (snapshots are meant to run on a cron; without this the directory grows without bound).')
+  .argument('<name>', 'snapshot group name')
+  .option('--keep <n>', 'how many of the newest snapshots to keep', '30')
+  .action(async (name: string, opts: { keep?: string }) => {
+    const keep = opts.keep === undefined ? 30 : Number(opts.keep);
+    if (!Number.isFinite(keep) || keep < 1) {
+      process.stderr.write(`error: --keep must be a positive integer, got "${opts.keep}"\n`);
+      process.exitCode = 2;
+      return;
+    }
+    if (keep < 3) {
+      process.stderr.write('error: --keep must be at least 3 — the time-series check needs ≥3 snapshots to work.\n');
+      process.exitCode = 2;
+      return;
+    }
+    const result = await pruneSnapshots(name, keep);
+    process.stdout.write(`pruned "${name}": kept ${result.kept}, removed ${result.removed}\n`);
   });
 
 snapshot

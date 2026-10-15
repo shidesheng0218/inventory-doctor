@@ -62,6 +62,19 @@ describe('CSV detection + parsing', () => {
     expect(parseQuantity(' 0 ')).toEqual({ quantity: 0, quantityRaw: ' 0 ', isBlank: false });
   });
 
+  it('reads grouped thousands separators as numbers, but leaves ambiguous comma forms alone', () => {
+    // "1,234" is a common ERP export shape — must be 1234, not 1.
+    expect(parseQuantity('1,234').quantity).toBe(1234);
+    expect(parseQuantity('12,345').quantity).toBe(12345);
+    expect(parseQuantity('1,234,567').quantity).toBe(1234567);
+    // Ambiguous decimal-comma shapes ("1,5", "12,34") are left unread (null)
+    // rather than silently misread — they surface as unreadable, not as a
+    // wrong stock count.
+    expect(parseQuantity('1,5').quantity).toBeNull();
+    expect(parseQuantity('12,34').quantity).toBeNull();
+    expect(parseQuantity('1,23').quantity).toBeNull();
+  });
+
   it('falls back to generic probing for unknown layouts (e.g. Amazon-style)', () => {
     const amazon = 'seller-sku\tasin1\tquantity\tfulfillment-channel\nAMZ-1\tB00X\t7\tFBA\n';
     const { records, detection } = loadCsv(amazon, 'amz');
