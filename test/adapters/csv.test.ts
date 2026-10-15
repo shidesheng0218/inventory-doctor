@@ -56,10 +56,10 @@ describe('CSV detection + parsing', () => {
   });
 
   it('keeps blank cells and explicit "0" strictly distinct', () => {
-    expect(parseQuantity('')).toEqual({ quantity: null, quantityRaw: '' });
-    expect(parseQuantity('  ')).toEqual({ quantity: null, quantityRaw: '  ' });
-    expect(parseQuantity('0')).toEqual({ quantity: 0, quantityRaw: '0' });
-    expect(parseQuantity(' 0 ')).toEqual({ quantity: 0, quantityRaw: ' 0 ' });
+    expect(parseQuantity('')).toEqual({ quantity: null, quantityRaw: '', isBlank: true });
+    expect(parseQuantity('  ')).toEqual({ quantity: null, quantityRaw: '  ', isBlank: true });
+    expect(parseQuantity('0')).toEqual({ quantity: 0, quantityRaw: '0', isBlank: false });
+    expect(parseQuantity(' 0 ')).toEqual({ quantity: 0, quantityRaw: ' 0 ', isBlank: false });
   });
 
   it('falls back to generic probing for unknown layouts (e.g. Amazon-style)', () => {
@@ -77,5 +77,26 @@ describe('CSV detection + parsing', () => {
 
   it('throws a helpful error when no SKU column can be found', () => {
     expect(() => loadCsv('Foo,Bar\n1,2\n', 'x')).toThrow(/SKU column/);
+  });
+
+  it('does NOT treat unrecognized text/price columns as inventory locations', () => {
+    // An ERP-style export with descriptive columns must not be misread as a
+    // wide multi-location inventory table — Price/Weight are not locations and
+    // their values are not stock counts.
+    const erp = 'SKU,Product Name,Price,Weight\nABC-1,Blue Widget,19.99,2.5\nDEF-2,Red Widget,5.00,1.0\n';
+    const { records, detection } = loadCsv(erp, 'erp');
+    expect(detection.format).toBe('generic'); // not shopify-inventory-wide
+    // Generic fallback keeps one record per SKU and never invents locations.
+    expect(records).toHaveLength(2);
+    expect(records.every((r) => r.location === null)).toBe(true);
+    expect(records.map((r) => r.sku)).toEqual(['ABC-1', 'DEF-2']);
+  });
+
+  it('still detects a genuine wide inventory table whose location columns hold numbers', () => {
+    const wide = 'SKU,Warehouse A,Warehouse B\nABC-1,8,4\nDEF-2,1,3\n';
+    const { detection, records } = loadCsv(wide, 'inv');
+    expect(detection.format).toBe('shopify-inventory-wide');
+    expect(detection.locationColumns).toEqual(['Warehouse A', 'Warehouse B']);
+    expect(records).toHaveLength(4);
   });
 });

@@ -4,13 +4,17 @@ import { normalizeSku } from '../normalize.js';
 
 // R3 — blank cell vs explicit "0". A blank quantity cell is the classic root
 // cause of "the import wiped my inventory": many tools read blank as 0.
+//
+// The trigger is `cellIsBlank === true`, which only CSV adapters set — a live
+// API read has no "blank cell" (a null quantity there means untracked), so
+// records from Shopify/WooCommerce API carry cellIsBlank=null and never fire.
 export function blankVsZero(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
   const sources = distinctSources(records);
 
   for (const r of records) {
     if (r.sku === null || normalizeSku(r.sku).canonical === '') continue;
-    if (r.quantityRaw.trim() !== '') continue; // only truly blank cells
+    if (r.cellIsBlank !== true) continue; // only genuine blank cells, from CSV sources
 
     // Is this SKU managed (with a real quantity) in another source? Then the
     // blank is dangerous: a sync could overwrite that quantity with 0.

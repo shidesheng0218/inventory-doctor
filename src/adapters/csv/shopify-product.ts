@@ -20,7 +20,7 @@ export function parseShopifyProductCsv(parsed: ParsedCsv, source: string, fields
     // rows without a SKU are option-less placeholders — skip them.
     if (sku === null) continue;
 
-    const { quantity, quantityRaw } = parseQuantity(get(row, 'quantity'));
+    const { quantity, quantityRaw, isBlank } = parseQuantity(get(row, 'quantity'));
     const trackedRaw = get(row, 'tracked');
     const tracked =
       trackedRaw === undefined
@@ -44,6 +44,7 @@ export function parseShopifyProductCsv(parsed: ParsedCsv, source: string, fields
       location: null,
       quantity,
       quantityRaw,
+      cellIsBlank: isBlank,
       tracked,
       meta,
     });

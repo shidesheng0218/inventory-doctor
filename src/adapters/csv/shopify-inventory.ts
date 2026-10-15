@@ -21,7 +21,7 @@ export function parseInventoryLong(parsed: ParsedCsv, source: string, fields: Ma
 
     const locationHeader = headerFor(fields, 'location');
     const availableHeader = headerFor(fields, 'available') ?? headerFor(fields, 'onHandCurrent');
-    const { quantity, quantityRaw } = parseQuantity(availableHeader ? row[availableHeader] : undefined);
+    const { quantity, quantityRaw, isBlank } = parseQuantity(availableHeader ? row[availableHeader] : undefined);
 
     const meta: Record<string, string> = {};
     for (const stateField of ['incoming', 'unavailable', 'committed', 'onHandCurrent', 'onHandNew', 'binName'] as CanonicalField[]) {
@@ -38,6 +38,7 @@ export function parseInventoryLong(parsed: ParsedCsv, source: string, fields: Ma
       location: blankToNull(locationHeader ? row[locationHeader] : undefined),
       quantity,
       quantityRaw,
+      cellIsBlank: isBlank,
       tracked: null,
       meta,
     });
@@ -64,7 +65,7 @@ export function parseInventoryWide(
     const title = blankToNull(headerFor(fields, 'title') ? row[headerFor(fields, 'title') as string] : undefined);
 
     for (const locationColumn of locationColumns) {
-      const { quantity, quantityRaw } = parseQuantity(row[locationColumn]);
+      const { quantity, quantityRaw, isBlank } = parseQuantity(row[locationColumn]);
       records.push({
         source,
         sku,
@@ -73,6 +74,7 @@ export function parseInventoryWide(
         location: locationColumn,
         quantity,
         quantityRaw,
+        cellIsBlank: isBlank,
         tracked: null,
         meta: {},
       });

@@ -38,6 +38,9 @@ function toRecord(source: string, title: string, fields: WooStockFields): Invent
     location: null,
     quantity,
     quantityRaw: quantity === null ? '' : String(quantity),
+    // Live API read: no "blank cell" concept — a null quantity here means
+    // manage_stock=false (untracked), so blank-vs-zero must not fire.
+    cellIsBlank: null,
     tracked: fields.manage_stock,
     meta: { inventoryPolicy: fields.backorders === 'no' ? 'deny' : 'continue' },
   };

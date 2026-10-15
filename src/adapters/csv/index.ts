@@ -11,9 +11,11 @@ export interface CsvAdapterResult {
 }
 
 // One entry point: detect the layout, dispatch to the right adapter.
+// detectFormat is given the parsed rows (not just headers) so the wide-format
+// check can confirm a candidate location column actually holds stock counts.
 export function loadCsv(content: string, source: string, mapping: ColumnMapping = {}): CsvAdapterResult {
   const parsed = parseCsvContent(content);
-  const detection = detectFormat(parsed.headers);
+  const detection = detectFormat(parsed);
 
   let records: InventoryRecord[];
   switch (detection.format) {

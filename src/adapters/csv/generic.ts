@@ -53,7 +53,7 @@ export function parseGenericCsv(
   for (const row of parsed.rows) {
     const sku = blankToNull(row[skuHeader]);
     if (sku === null) continue;
-    const { quantity, quantityRaw } = parseQuantity(quantityHeader ? row[quantityHeader] : undefined);
+    const { quantity, quantityRaw, isBlank } = parseQuantity(quantityHeader ? row[quantityHeader] : undefined);
 
     const meta: Record<string, string> = {};
     for (const header of parsed.headers) {
@@ -70,6 +70,7 @@ export function parseGenericCsv(
       location: locationHeader ? blankToNull(row[locationHeader]) : null,
       quantity,
       quantityRaw,
+      cellIsBlank: isBlank,
       tracked: null,
       meta,
     });

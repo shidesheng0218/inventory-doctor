@@ -97,6 +97,9 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
           location: null,
           quantity: qty,
           quantityRaw: qty === null ? '' : String(qty),
+          // Live API read: "blank cell" does not exist here. A null quantity
+          // means untracked, not empty — so blank-vs-zero must not fire.
+          cellIsBlank: null,
           meta,
         });
         continue;
@@ -113,6 +116,7 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
           location: level.location.name,
           quantity: available?.quantity ?? null,
           quantityRaw: available === undefined ? '' : String(available.quantity),
+          cellIsBlank: null,
           meta: levelMeta,
         });
       }

@@ -86,7 +86,7 @@ describe('wide inventory CSV fixtures end-to-end', () => {
 
   it('detects the wide format and treats location headers as locations', async () => {
     const { sources } = await runDiff([{ kind: 'csv', path: E }, { kind: 'csv', path: F }]);
-    expect(sources[0]?.detail).toContain('unrecognized headers treated as locations');
+    expect(sources[0]?.detail).toContain('unrecognized headers that look like stock locations');
     expect(sources[0]?.records).toHaveLength(4);
     expect(sources[0]?.records.map((r) => r.location)).toEqual([
       'Warehouse A',

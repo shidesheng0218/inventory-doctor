@@ -9,6 +9,11 @@ export interface InventoryRecord {
   location: string | null; // null = source has no location dimension
   quantity: number | null; // null !== 0; this distinction is a core capability
   quantityRaw: string; // raw cell content, used to tell blank from "0"
+  // Whether the source genuinely had a BLANK cell for this quantity. CSV
+  // parsers set true/false; API adapters set null because "blank cell" does
+  // not exist for a live API read — a null quantity there means "not tracked",
+  // not "someone left the cell empty". blank-vs-zero only fires on true.
+  cellIsBlank: boolean | null;
   tracked: boolean | null; // whether Shopify's inventory tracker is on
   meta: Record<string, string>; // other columns, kept for extensibility
 }

@@ -20,15 +20,18 @@ export function parseCsvContent(content: string): ParsedCsv {
   return { headers, rows: result.data };
 }
 
-// Cell value → quantity. Blank (empty or whitespace-only) becomes null and
-// stays distinguishable from an explicit "0" via quantityRaw.
-export function parseQuantity(raw: string | undefined): { quantity: number | null; quantityRaw: string } {
+// Cell value → quantity + whether the cell was genuinely blank. Blank (empty
+// or whitespace-only) becomes null and stays distinguishable from an explicit
+// "0" via quantityRaw. `isBlank` is the CSV-only signal that the blank-vs-zero
+// rule keys on — an API source never sets it (a null quantity there means
+// "not tracked", not "empty cell").
+export function parseQuantity(raw: string | undefined): { quantity: number | null; quantityRaw: string; isBlank: boolean } {
   const quantityRaw = raw ?? '';
-  const trimmed = quantityRaw.trim();
-  if (trimmed === '') return { quantity: null, quantityRaw };
-  const n = Number(trimmed);
-  if (!Number.isFinite(n)) return { quantity: null, quantityRaw };
-  return { quantity: Math.trunc(n), quantityRaw };
+  const isBlank = quantityRaw.trim() === '';
+  if (isBlank) return { quantity: null, quantityRaw, isBlank };
+  const n = Number(quantityRaw.trim());
+  if (!Number.isFinite(n)) return { quantity: null, quantityRaw, isBlank };
+  return { quantity: Math.trunc(n), quantityRaw, isBlank };
 }
 
 export function blankToNull(raw: string | undefined): string | null {

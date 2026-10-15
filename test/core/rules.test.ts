@@ -116,6 +116,27 @@ describe('R3 blank-vs-zero', () => {
     const findings = blankVsZero([rec({ source: 'a', sku: 'W-1', quantity: null, quantityRaw: '   ' })]);
     expect(findings).toHaveLength(1);
   });
+
+  it('does NOT fire for API-sourced records (cellIsBlank = null) — a live read has no blank cell', () => {
+    // Shopify/WooCommerce adapters set cellIsBlank: null for untracked items.
+    // That null quantity means "not tracked", never "blank import cell", so the
+    // rule must stay silent instead of emitting a spurious "import may read this
+    // as 0" critical.
+    const findings = blankVsZero([
+      rec({ source: 'store-a', sku: 'SKU-UNTRACKED', quantity: null, quantityRaw: '', tracked: false, cellIsBlank: null }),
+      rec({ source: 'store-b', sku: 'SKU-UNTRACKED', quantity: 5, quantityRaw: '5', tracked: true, cellIsBlank: null }),
+    ]);
+    expect(findings).toHaveLength(0);
+  });
+
+  it('still fires for a genuine CSV blank cell (cellIsBlank = true)', () => {
+    const findings = blankVsZero([
+      rec({ source: 'a', sku: 'B-1', quantity: null, quantityRaw: '', cellIsBlank: true }),
+      rec({ source: 'b', sku: 'B-1', quantity: 5, quantityRaw: '5', cellIsBlank: false }),
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('critical');
+  });
 });
 
 describe('R4 barcode-crosscheck', () => {
