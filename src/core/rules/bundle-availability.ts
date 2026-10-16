@@ -3,12 +3,9 @@ import { distinctSources } from '../match.js';
 import { normalizeSku } from '../normalize.js';
 import { DEFAULT_DIAGNOSE_OPTIONS, type DiagnoseOptions } from '../types.js';
 
-// R9 — bundle (kit) availability:
-//   a bundle listed as sellable while its components can no longer support
-//   even one assembly (critical: orders will be accepted and fail);
-//   listed bundle quantity drifting from what component stock actually
-//   supports (warning); a component missing entirely from a source
-//   (warning — availability cannot be fully computed).
+// R9 — compare listed bundle quantities with assemblies calculated from the
+// supplied component quantities. Fulfillment and preassembled stock require
+// separate verification.
 //
 // Evaluation is per (source, location): when a source has no location
 // dimension, each SKU's cross-location sum is used. Component and bundle
@@ -40,16 +37,16 @@ export function bundleAvailability(
     }
 
     for (const { location, records: bucket } of buckets.values()) {
-      // Canonical SKU → aggregate quantity (sum of non-null; a blank cell
-      // counts as 0 here — blank-vs-zero reports it separately) + raw SKU
-      // for display.
-      const qtyBySku = new Map<string, { qty: number; raw: string }>();
+      // Incomplete numeric data is retained as unknown, never treated as
+      // evidence that a component has zero stock.
+      const qtyBySku = new Map<string, { qty: number; raw: string; unknown: boolean }>();
       for (const r of bucket) {
         if (r.sku === null) continue;
         const canonical = normalizeSku(r.sku).canonical;
         if (canonical === '') continue;
-        const entry = qtyBySku.get(canonical) ?? { qty: 0, raw: r.sku };
+        const entry = qtyBySku.get(canonical) ?? { qty: 0, raw: r.sku, unknown: false };
         entry.qty += r.quantity ?? 0;
+        entry.unknown ||= r.quantity === null;
         qtyBySku.set(canonical, entry);
       }
 
@@ -61,11 +58,11 @@ export function bundleAvailability(
         let computedMax = Infinity; // min over PRESENT components
         for (const component of def.components) {
           const componentEntry = qtyBySku.get(normalizeSku(component.sku).canonical);
-          if (!componentEntry) {
+          if (!componentEntry || componentEntry.unknown) {
             missing.push(component.sku);
             continue;
           }
-          computedMax = Math.min(computedMax, Math.floor(componentEntry.qty / component.quantity));
+          computedMax = Math.min(computedMax, Math.max(0, Math.floor(componentEntry.qty / component.quantity)));
         }
 
         const where = location !== null ? ` at location "${location}"` : '';
@@ -76,22 +73,22 @@ export function bundleAvailability(
             rule: 'bundle-availability',
             severity: 'warning',
             sku: listed.raw,
-            message: `"${listed.raw}" in ${source}${where} is missing component(s): ${missing.join(', ')} — bundle availability cannot be fully computed`,
+            message: `"${listed.raw}" in ${source}${where} has missing or non-numeric component(s): ${missing.join(', ')} — bundle availability cannot be fully computed`,
             detail: { source, listed: listed.qty, missing, ...locDetail },
             suggestion:
-              'Add the missing component SKU(s) to this source, or fix the bundle definition if the component was renamed.',
+              'Check component identifiers, export scope, tracking and quantity data; verify the kit definition before changing records.',
           });
         }
 
-        if (computedMax === Infinity) continue; // no component present at all — the missing warning above carries it
+        if (computedMax === Infinity || missing.length > 0 || listed.unknown) continue; // no component present at all — the missing warning above carries it
         if (computedMax === 0 && listed.qty > 0) {
           findings.push({
             rule: 'bundle-availability',
-            severity: 'critical',
+            severity: options.allowBackorders ? 'warning' : 'critical',
             sku: listed.raw,
-            message: `"${listed.raw}" is listed with quantity ${listed.qty} in ${source}${where} but its components can support 0 bundles — new orders cannot be fulfilled`,
+            message: `"${listed.raw}" is listed with quantity ${listed.qty} in ${source}${where} but the reported component quantities calculate to 0 assemblies`,
             detail: { source, listed: listed.qty, computedMax: 0, ...locDetail },
-            suggestion: 'Pause the bundle listing or restock its components before more orders come in.',
+            suggestion: 'Check preassembled stock, component reservations, replenishment and backorder policy; adjust or pause the listing if immediate assembly is required.',
           });
           continue; // the critical carries the actionable message; no drift duplicate
         }
@@ -104,15 +101,23 @@ export function bundleAvailability(
             rule: 'bundle-availability',
             severity: 'warning',
             sku: listed.raw,
-            message: `"${listed.raw}" listed quantity ${listed.qty} in ${source}${where} but component stock supports ${computedMax}`,
+            message: `"${listed.raw}" listed quantity ${listed.qty} in ${source}${where} but the reported component quantities calculate to ${computedMax} assemblies`,
             detail: { source, listed: listed.qty, computedMax, diff, pct, ...locDetail },
             suggestion:
-              'Recompute the bundle quantity from component stock and correct the listing, or investigate orders/restocks that consumed components without decrementing the bundle.',
+              'Verify kit definitions, preassembled stock, reservations and component availability before recomputing or changing the listing.',
           });
         }
       }
     }
   }
 
-  return findings;
+  return findings.map((f) => ({
+    ...f,
+    evidence: [f.message],
+    risk: f.detail['missing'] !== undefined
+      ? 'Missing or non-numeric component data prevents a complete assembly calculation; it does not establish that the component is out of stock.'
+      : 'If fulfillment requires assembling the configured components from this inventory, listed availability may exceed assembly capacity. Preassembled stock, replenishment or backorders may explain the difference.',
+    assumptions: ['Configured component quantities are correct and quantities describe usable stock at the same location.', 'Preassembled bundles, allocations and inbound replenishment are not represented in this calculation.', `Intentional backorders: ${options.allowBackorders === true}.`],
+    verification: ['Check kit definitions, component stock, preassembled units, reservations and backorder commitments before changing availability.'],
+  }));
 }

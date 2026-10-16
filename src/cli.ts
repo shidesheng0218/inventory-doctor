@@ -1,8 +1,10 @@
 import { Command } from 'commander';
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
-import { saveSnapshot, listSnapshots, pruneSnapshots } from './snapshots.js';
+import { saveSnapshot, listSnapshots, pruneSnapshots, planPruneSnapshots } from './snapshots.js';
 import { skuHistory } from './history.js';
 import { sendWebhook } from './notify.js';
 import { loadConfigIfExists } from './config.js';
@@ -35,22 +37,15 @@ function parseMapping(values: string[] | undefined): ColumnMapping {
   return mapping;
 }
 
-function collect(value: string, previous: string[]): string[] {
-  return previous.concat([value]);
+function integerOption(value: string, flag: string, minimum = 1): number {
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < minimum) {
+    throw new Error(`${flag} must be a safe integer >= ${minimum}`);
+  }
+  return Number(value);
 }
 
-// Reconstruct the command-line form of a source, for the post-fix verify hint.
-function sourceArgFor(input: SourceInput): string {
-  switch (input.kind) {
-    case 'csv':
-      return input.path;
-    case 'store':
-      return `--store ${input.name}`;
-    case 'woo':
-      return `--woo ${input.name}`;
-    case 'snapshot':
-      return `--baseline ${input.ref}`;
-  }
+function collect(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
 }
 
 const program = new Command();
@@ -59,6 +54,27 @@ program
   .name('inventory-doctor')
   .description('Multi-source inventory sync diagnostics — find the SKUs you are overselling without knowing it.')
   .version('0.4.0');
+
+program
+  .command('demo')
+  .description('Run bundled synthetic examples without credentials or a checkout.')
+  .option('--format <format>', 'terminal | json | markdown | html', 'terminal')
+  .action(async (opts: { format: string }) => {
+    try {
+      if (!['terminal', 'json', 'markdown', 'html'].includes(opts.format)) throw new Error('Unknown output format');
+      const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+      const { report } = await runDiff([
+        { kind: 'csv', path: resolve(root, 'fixtures/shopify-store-a.csv') },
+        { kind: 'csv', path: resolve(root, 'fixtures/shopify-store-b.csv') },
+      ]);
+      process.stderr.write('Synthetic demonstration data; findings are examples, not verified incidents.\n');
+      process.stdout.write(opts.format === 'json' ? renderJson(report) : opts.format === 'html' ? renderHtml(report) : opts.format === 'markdown' ? renderMarkdown(report) : renderTerminal(report));
+      // A demonstration succeeds even when its deliberately seeded findings are critical.
+    } catch (err) {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 2;
+    }
+  });
 
 program
   .command('diff')
@@ -74,7 +90,7 @@ program
   .option('--drift-abs <n>', 'absolute quantity drift threshold', (v) => Number(v))
   .option('--drift-pct <n>', 'percentage quantity drift threshold (0-1)', (v) => Number(v))
   .option('--baseline <ref>', 'compare one source against a saved snapshot ("<name>", "<name>@<id>", or a .jsonl path)')
-  .option('--fix-export <path>', 'write a Shopify-importable CSV that brings the second source in line with the first')
+  .option('--fix-export <path>', 'write an available-quantity review proposal (NOT a Shopify import file)')
   .option('--force', 'allow --fix-export to overwrite an existing file')
   .action(async (fileA: string | undefined, fileB: string | undefined, opts) => {
     try {
@@ -126,47 +142,17 @@ program
 
       if (typeof opts.fixExport === 'string') {
         const fix = buildFixExport(report, sources.flatMap((s) => s.records));
-        // The fix direction is a semantic decision the user must see: the
-        // FIRST source is the source of truth, and with mixed flags the first
-        // source is not necessarily the first flag on the command line
-        // (precedence: positional files, --csv, --store, --woo, --baseline).
-        const truth = sources[0]?.name ?? '';
-        const criticals = report.findings.filter((f) => f.severity === 'critical').length;
-        if (fix.rows.length === 0) {
-          process.stderr.write('no fixable critical findings — no fix file written\n');
-          if (criticals > 0) {
-            process.stderr.write(
-              `note: ${criticals} critical finding(s) cannot be fixed by an inventory import ` +
-                '(e.g. SKUs missing from the target entirely) — resolve those in the source systems.\n',
-            );
-          }
-        } else if (existsSync(opts.fixExport) && !opts.force) {
-          // A fix file is meant to be reviewed and imported — clobbering a
-          // previous one silently would destroy that audit trail.
-          process.stderr.write(
-            `error: ${opts.fixExport} already exists — refusing to overwrite. Pass --force to replace it.\n`,
-          );
-          process.exitCode = 2;
-          return;
+        process.stderr.write(`review direction: compare "${fix.targetSource}" against "${fix.truthSource}" (user-selected baseline, not verified truth)\n`);
+        process.stderr.write(`warning: ${fix.basis}\n`);
+        process.stderr.write(`review proposals: ${fix.rows.length} review-required, ${fix.proposals.filter((p) => p.status === 'blocked').length} blocked; NOT a Shopify import file\n`);
+        if (!fix.csv) {
+          process.stderr.write('no review proposals — no file written\n');
         } else {
-          process.stderr.write(
-            `fix direction: bring "${fix.targetSource}" in line with "${truth}" (first source = source of truth)\n`,
-          );
-          await writeFile(opts.fixExport, fix.csv, 'utf8');
-          process.stderr.write(
-            `wrote ${fix.rows.length} fix rows to ${opts.fixExport} — review it, then import into ${fix.targetSource}\n`,
-          );
-          // Close the loop: re-diffing the truth source against the fix file
-          // proves the fix would heal the report before anything is imported.
-          process.stderr.write(
-            `verify before importing: inventory-doctor diff ${sourceArgFor(inputs[0] as SourceInput)} ${opts.fixExport}\n`,
-          );
-          if (criticals > fix.rows.length) {
-            process.stderr.write(
-              `note: ${criticals - fix.rows.length} critical finding(s) are not covered by this fix file ` +
-                '(an inventory import cannot create missing SKUs or re-map barcodes) — resolve those in the source systems.\n',
-            );
+          if (existsSync(opts.fixExport) && !opts.force) {
+            throw new Error(`${opts.fixExport} already exists — refusing to overwrite. Pass --force to replace it.`);
           }
+          await writeFile(opts.fixExport, fix.csv, { encoding: 'utf8', flag: opts.force ? 'w' : 'wx' });
+          process.stderr.write(`wrote review proposal to ${opts.fixExport} — NOT a Shopify import file. Verify quantities, inventory states and locations against source records and a physical count before making changes.\n`);
         }
       }
 
@@ -223,23 +209,27 @@ snapshot
 
 snapshot
   .command('prune')
-  .description('Delete all but the newest snapshots of a source (snapshots are meant to run on a cron; without this the directory grows without bound).')
+  .description('Preview retention; pass --yes to delete old snapshots.')
   .argument('<name>', 'snapshot group name')
-  .option('--keep <n>', 'how many of the newest snapshots to keep', '30')
-  .action(async (name: string, opts: { keep?: string }) => {
-    const keep = opts.keep === undefined ? 30 : Number(opts.keep);
-    if (!Number.isFinite(keep) || keep < 1) {
-      process.stderr.write(`error: --keep must be a positive integer, got "${opts.keep}"\n`);
+  .option('--keep <n>', 'newest snapshots to retain (integer >=3)', '30')
+  .option('--dry-run', 'preview only; never delete')
+  .option('--yes', 'approve deletion after printing the plan')
+  .action(async (name: string, opts: { keep: string; dryRun?: boolean; yes?: boolean }) => {
+    try {
+      const keep = integerOption(opts.keep, '--keep', 3);
+      const plan = await planPruneSnapshots(name, keep);
+      for (const stub of plan.toRemove) process.stdout.write(`candidate: ${stub.id}  ${stub.path}\n`);
+      if (opts.dryRun && opts.yes) throw new Error('--dry-run and --yes are mutually exclusive');
+      if (opts.dryRun || !opts.yes) {
+        process.stdout.write(`preview "${name}": keep ${plan.kept.length}, would remove ${plan.toRemove.length}; pass --yes to delete\n`);
+        return;
+      }
+      const result = await pruneSnapshots(name, keep);
+      process.stdout.write(`pruned "${name}": kept ${result.kept}, removed ${result.removed}\n`);
+    } catch (err) {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exitCode = 2;
-      return;
     }
-    if (keep < 3) {
-      process.stderr.write('error: --keep must be at least 3 — the time-series check needs ≥3 snapshots to work.\n');
-      process.exitCode = 2;
-      return;
-    }
-    const result = await pruneSnapshots(name, keep);
-    process.stdout.write(`pruned "${name}": kept ${result.kept}, removed ${result.removed}\n`);
   });
 
 snapshot
@@ -251,7 +241,7 @@ snapshot
   .action(async (name: string, opts: { window?: string; webhook?: string }) => {
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
-      const checkOptions = opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) };
+      const checkOptions = opts.window === undefined ? {} : { maxSnapshots: integerOption(opts.window, '--window') };
       const result = await runSnapshotCheck(name, checkOptions);
       const scope = result.windowed
         ? `${result.snapshots.length} of ${result.totalSnapshots} snapshots (windowed)`
@@ -308,7 +298,7 @@ snapshot
   .action(async (name: string, sku: string, opts: { window?: string }) => {
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
-      const history = await skuHistory(sku, name, opts.window === undefined ? {} : { maxSnapshots: Number(opts.window) });
+      const history = await skuHistory(sku, name, opts.window === undefined ? {} : { maxSnapshots: integerOption(opts.window, '--window') });
       if (!history.found) {
         process.stdout.write(`no records for SKU "${sku}" in snapshot history "${name}"\n`);
         return;

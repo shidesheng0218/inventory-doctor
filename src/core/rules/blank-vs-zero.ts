@@ -38,8 +38,8 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
       sku: r.sku,
       message:
         managedElsewhere !== null
-          ? `"${r.sku}" has a BLANK quantity cell in ${r.source}${where} (not "0") while ${managedElsewhere} tracks a real quantity — an import may read this as 0 and wipe the stock`
-          : `"${r.sku}" has a BLANK quantity cell in ${r.source}${where} (not "0") — imports may silently treat this as 0`,
+          ? `"${r.sku}" has a BLANK quantity cell in ${r.source}${where} (not "0") while ${managedElsewhere} tracks a real quantity`
+          : `"${r.sku}" has a BLANK quantity cell in ${r.source}${where} (not "0")`,
       detail: {
         source: r.source,
         location: r.location,
@@ -47,7 +47,11 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
         managedElsewhere,
         isExplicitZero: false,
       },
-      suggestion: 'Write an explicit "0" if the item is truly out of stock, or fill in the real quantity. Never leave quantity cells blank before a bulk import.',
+      suggestion: 'Check how the intended importer handles blanks (ignore, clear or zero); enter a verified quantity only if an update is intended.',
+      evidence: [`${r.source}${where}: quantity cell is blank, not an explicit zero.`],
+      risk: 'If the importer converts blanks to zero and applies inventory updates, this cell could overwrite stock with zero. Import behavior is not established by the CSV.',
+      assumptions: ['The file will be imported using a mode that updates inventory.'],
+      verification: ['Check importer blank-cell behavior, update mode, SKU/location mapping and intended stock before importing.'],
     });
   }
 

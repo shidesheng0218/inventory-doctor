@@ -1,6 +1,6 @@
 import type { InventoryRecord } from '../../core/types.js';
 import type { CanonicalField } from './aliases.js';
-import { blankToNull, parseQuantity, type ParsedCsv } from './parse.js';
+import { blankToNull, parseQuantityCell, type ParsedCsv } from './parse.js';
 
 function headerFor(fields: Map<string, CanonicalField>, field: CanonicalField): string | undefined {
   for (const [header, f] of fields) {
@@ -14,14 +14,14 @@ function headerFor(fields: Map<string, CanonicalField>, field: CanonicalField): 
 // state columns are kept in meta.
 export function parseInventoryLong(parsed: ParsedCsv, source: string, fields: Map<string, CanonicalField>): InventoryRecord[] {
   const records: InventoryRecord[] = [];
-  for (const row of parsed.rows) {
+  for (const [rowIndex, row] of parsed.rows.entries()) {
     const skuHeader = headerFor(fields, 'sku');
     const sku = blankToNull(skuHeader ? row[skuHeader] : undefined);
     if (sku === null) continue;
 
     const locationHeader = headerFor(fields, 'location');
     const availableHeader = headerFor(fields, 'available') ?? headerFor(fields, 'onHandCurrent');
-    const { quantity, quantityRaw, isBlank } = parseQuantity(availableHeader ? row[availableHeader] : undefined);
+    const { quantity, quantityRaw, isBlank } = parseQuantityCell(parsed, row, availableHeader, source, rowIndex);
 
     const meta: Record<string, string> = {};
     for (const stateField of ['incoming', 'unavailable', 'committed', 'onHandCurrent', 'onHandNew', 'binName'] as CanonicalField[]) {
@@ -56,7 +56,7 @@ export function parseInventoryWide(
   locationColumns: string[],
 ): InventoryRecord[] {
   const records: InventoryRecord[] = [];
-  for (const row of parsed.rows) {
+  for (const [rowIndex, row] of parsed.rows.entries()) {
     const skuHeader = headerFor(fields, 'sku');
     const sku = blankToNull(skuHeader ? row[skuHeader] : undefined);
     if (sku === null) continue;
@@ -65,7 +65,7 @@ export function parseInventoryWide(
     const title = blankToNull(headerFor(fields, 'title') ? row[headerFor(fields, 'title') as string] : undefined);
 
     for (const locationColumn of locationColumns) {
-      const { quantity, quantityRaw, isBlank } = parseQuantity(row[locationColumn]);
+      const { quantity, quantityRaw, isBlank } = parseQuantityCell(parsed, row, locationColumn, source, rowIndex);
       records.push({
         source,
         sku,

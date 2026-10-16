@@ -5,6 +5,7 @@ import { blankVsZero } from '../../src/core/rules/blank-vs-zero.js';
 import { barcodeCrosscheck } from '../../src/core/rules/barcode-crosscheck.js';
 import { computeHealthSummary, healthScore, quantityDrift } from '../../src/core/rules/quantity-drift.js';
 import { untracked } from '../../src/core/rules/untracked.js';
+import { DEFAULT_DIAGNOSE_OPTIONS } from '../../src/core/types.js';
 import { rec } from '../helpers.js';
 
 describe('R1 sku-mismatch', () => {
@@ -28,11 +29,11 @@ describe('R1 sku-mismatch', () => {
     expect(findings[0]?.detail['kind']).toBe('prefix-suffix');
   });
 
-  it('flags true orphans as critical on both sides', () => {
+  it('reports unmatched supplied catalog records as warnings', () => {
     const findings = skuMismatch([rec({ source: 'a', sku: 'ONLY-A' }), rec({ source: 'b', sku: 'ONLY-B' })]);
     const orphans = findings.filter((f) => f.detail['kind'] === 'orphan');
     expect(orphans).toHaveLength(2);
-    expect(orphans.every((f) => f.severity === 'critical')).toBe(true);
+    expect(orphans.every((f) => f.severity === 'warning')).toBe(true);
   });
 
   it('flags one-to-many duplicates within a single source as critical', () => {
@@ -56,14 +57,14 @@ describe('R1 sku-mismatch', () => {
 });
 
 describe('R2 oversell-risk', () => {
-  it('flags qty <= 0 in one source vs > 0 in the other as critical', () => {
+  it('warns on non-positive vs positive quantities when stock relationship is unknown', () => {
     const findings = oversellRisk([
       rec({ source: 'a', sku: 'X-1', quantity: 0, quantityRaw: '0' }),
       rec({ source: 'b', sku: 'X-1', quantity: 8, quantityRaw: '8' }),
     ]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe('critical');
-    expect(findings[0]?.message).toContain('out of stock');
+    expect(findings[0]?.severity).toBe('warning');
+    expect(findings[0]?.message).toContain('non-positive quantity');
   });
 
   it('warns on continue-selling policy with qty <= 0', () => {
@@ -86,7 +87,7 @@ describe('R2 oversell-risk', () => {
     const severe = oversellRisk([
       rec({ source: 'a', sku: 'X-4', quantity: 100, quantityRaw: '100' }),
       rec({ source: 'b', sku: 'X-4', quantity: 50, quantityRaw: '50' }),
-    ]);
+    ], { ...DEFAULT_DIAGNOSE_OPTIONS, inventoryRelationship: 'shared' });
     expect(severe[0]?.severity).toBe('critical');
   });
 

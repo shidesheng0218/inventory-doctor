@@ -1,3 +1,4 @@
+import { diagnose } from '../../src/core/diagnose.js';
 import { describe, expect, it, vi } from 'vitest';
 import { API_VERSION, ShopifyClient } from '../../src/adapters/shopify-api/client.js';
 import { StaticTokenProvider } from '../../src/adapters/shopify-api/token-provider.js';
@@ -42,6 +43,7 @@ function variantPage(skus: string[], hasNextPage: boolean, endCursor: string | n
                   ],
                 },
               ],
+              pageInfo: { hasNextPage: false, endCursor: null },
             },
           },
         })),
@@ -197,5 +199,98 @@ describe('fetchInventory', () => {
     const body = String((fetchFn.mock.calls[0] as [string, RequestInit])[1].body);
     expect(body).toContain('quantities(names: [\\"available\\", \\"on_hand\\", \\"committed\\", \\"incoming\\"])');
     expect(body).toContain('includeInactive: true');
+  });
+});
+
+
+function levelsPage(hasNextPage: boolean, endCursor: string | null, empty = false) {
+  const first = variantPage(['A'], false, null).data.productVariants.nodes[0]!;
+  return { data: { inventoryItem: {
+    id: first.inventoryItem.id,
+    inventoryLevels: {
+      nodes: empty ? [] : first.inventoryItem.inventoryLevels.nodes,
+      pageInfo: { hasNextPage, endCursor },
+    },
+  } } };
+}
+
+function multiLocationFirst() {
+  const first = variantPage(['A'], false, null);
+  first.data.productVariants.nodes[0]!.inventoryItem.inventoryLevels.pageInfo = { hasNextPage: true, endCursor: 'level-1' };
+  return first;
+}
+
+describe('Shopify snapshot completeness', () => {
+  it('fetches all nested location pages with opaque cursors', async () => {
+    const fetchFn = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(graphqlResponse(multiLocationFirst()))
+      .mockResolvedValueOnce(graphqlResponse(levelsPage(true, 'level-2')))
+      .mockResolvedValueOnce(graphqlResponse(levelsPage(false, null)));
+    const records = await fetchInventory(makeClient(fetchFn), 'store');
+    expect(records).toHaveLength(3);
+    expect(fetchFn.mock.calls.slice(1).map(([, init]) => JSON.parse(String(init?.body)).variables)).toEqual([
+      { itemId: 'gid://shopify/InventoryItem/0', cursor: 'level-1' },
+      { itemId: 'gid://shopify/InventoryItem/0', cursor: 'level-2' },
+    ]);
+  });
+
+  it.each([null, '', '   '])('rejects variant hasNextPage with cursor %j', async (cursor) => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(graphqlResponse(variantPage(['A'], true, cursor)));
+    await expect(fetchInventory(makeClient(fetchFn), 'store')).rejects.toThrow(/nonempty cursor/);
+  });
+
+  it('rejects variant cursor cycles and empty continuation pages', async () => {
+    for (const pages of [
+      [variantPage(['A'], true, 'one'), variantPage(['B'], true, 'two'), variantPage(['C'], true, 'one')],
+      [variantPage(['A'], true, 'one'), variantPage([], false, null)],
+      [variantPage([], true, 'one')],
+    ]) {
+      const fetchFn = vi.fn<typeof fetch>();
+      for (const page of pages) fetchFn.mockResolvedValueOnce(graphqlResponse(page));
+      await expect(fetchInventory(makeClient(fetchFn), 'store')).rejects.toThrow(/repeated cursor|empty pagination page/);
+    }
+  });
+
+  it.each([null, '', '   '])('rejects nested hasNextPage with cursor %j', async (cursor) => {
+    const first = multiLocationFirst();
+    Object.assign(first.data.productVariants.nodes[0]!.inventoryItem.inventoryLevels.pageInfo, { endCursor: cursor });
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(graphqlResponse(first));
+    await expect(fetchInventory(makeClient(fetchFn), 'store')).rejects.toThrow(/nonempty cursor/);
+  });
+
+  it('rejects missing objects, empty nested pages, invalid nested cursors and cycles', async () => {
+    for (const pages of [
+      [{ data: { inventoryItem: null } }],
+      [levelsPage(false, null, true)],
+      [levelsPage(true, null)],
+      [levelsPage(true, 'level-1')],
+      [levelsPage(true, 'level-2'), levelsPage(true, 'level-1')],
+    ]) {
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(graphqlResponse(multiLocationFirst()));
+      for (const page of pages) fetchFn.mockResolvedValueOnce(graphqlResponse(page));
+      await expect(fetchInventory(makeClient(fetchFn), 'store')).rejects.toThrow(/Incomplete Shopify snapshot/);
+    }
+  });
+
+  it('propagates later-page failures instead of returning accumulated records', async () => {
+    for (const first of [variantPage(['A'], true, 'next'), multiLocationFirst()]) {
+      const fetchFn = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(graphqlResponse(first))
+        .mockResolvedValueOnce(graphqlResponse({ errors: [{ message: 'access denied' }] }));
+      await expect(fetchInventory(makeClient(fetchFn), 'store')).rejects.toThrow(/access denied/);
+    }
+  });
+
+  it('adapter → diagnose never flags API null quantities as blank CSV cells', async () => {
+    const page = variantPage(['A', 'B'], false, null);
+    page.data.productVariants.nodes[0]!.inventoryItem.inventoryLevels.nodes[0]!.quantities = [];
+    page.data.productVariants.nodes[1]!.inventoryItem.inventoryLevels.nodes = [];
+    Object.assign(page.data.productVariants.nodes[1]!, { inventoryQuantity: null });
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(graphqlResponse(page));
+    const records = await fetchInventory(makeClient(fetchFn), 'api');
+    expect(records.map((r) => r.cellIsBlank)).toEqual([null, null]);
+    expect(records.map((r) => r.quantity)).toEqual([null, null]);
+    const zeroes = records.map((r) => ({ ...r, source: 'other-api', quantity: 0, quantityRaw: '0' }));
+    expect(diagnose([...records, ...zeroes]).findings.filter((f) => f.rule === 'blank-vs-zero')).toEqual([]);
   });
 });

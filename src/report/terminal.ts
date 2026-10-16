@@ -31,6 +31,10 @@ export function renderTerminal(report: DiagnoseReport): string {
     lines.push('-'.repeat(60));
     for (const f of findings) {
       lines.push(`${TAG[severity]} ${f.message}`);
+      if (f.evidence?.length) lines.push(`           observed: ${f.evidence.join(' | ')}`);
+      if (f.risk) lines.push(`           risk: ${f.risk}`);
+      if (f.assumptions?.length) lines.push(`           assumptions: ${f.assumptions.join(' | ')}`);
+      if (f.verification?.length) lines.push(`           verify: ${f.verification.join(' | ')}`);
       lines.push(`           rule: ${f.rule}`);
       lines.push(`           fix:  ${f.suggestion}`);
     }

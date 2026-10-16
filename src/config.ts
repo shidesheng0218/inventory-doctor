@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { RULES } from './core/diagnose.js';
 import { normalizeSku } from './core/normalize.js';
-import type { BundleDef, Severity } from './core/types.js';
+import type { BundleDef, DiagnoseOptions, Severity } from './core/types.js';
 
 // Store config. Credentials may be written inline or referenced as
 // "env:VAR_NAME" so secrets never have to live in the file.
@@ -35,6 +35,8 @@ export interface RulesConfig {
   severityOverrides?: Record<string, Severity>; // rule id → forced severity
   driftAbsThreshold?: number;
   driftPctThreshold?: number;
+  inventoryRelationship?: DiagnoseOptions['inventoryRelationship'];
+  allowBackorders?: boolean;
 }
 
 // Notification targets. The CLI flag wins when both are set.
@@ -140,6 +142,12 @@ export function validateBundles(bundles: unknown, path: string): asserts bundles
 }
 
 function validateRules(rules: RulesConfig, path: string): void {
+  if (rules.inventoryRelationship !== undefined && !['unknown', 'shared', 'independent'].includes(rules.inventoryRelationship)) {
+    throw new Error(`Invalid config at ${path}: rules.inventoryRelationship must be unknown, shared, or independent.`);
+  }
+  if (rules.allowBackorders !== undefined && typeof rules.allowBackorders !== 'boolean') {
+    throw new Error(`Invalid config at ${path}: rules.allowBackorders must be a boolean.`);
+  }
   const badRule = (id: string) => !(RULES as readonly string[]).includes(id);
   for (const id of rules.disable ?? []) {
     if (badRule(id)) throw new Error(`Invalid config at ${path}: unknown rule "${id}" in rules.disable. Known: ${RULES.join(', ')}`);

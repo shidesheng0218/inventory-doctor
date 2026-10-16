@@ -101,7 +101,7 @@ th { background: #f6f6f6; }
       const suggestion = f.suggestion === '' ? '—' : escapeHtml(f.suggestion);
       parts.push(
         `<tr><td><code>${escapeHtml(f.rule)}</code></td><td><code>${sku}</code></td>` +
-          `<td>${escapeHtml(f.message)}</td><td>${suggestion}</td></tr>\n`,
+          `<td>${escapeHtml(f.message)}${f.evidence?.length ? `<br><small>Observed: ${escapeHtml(f.evidence.join('; '))}</small>` : ''}${f.risk ? `<br><small>Conditional risk: ${escapeHtml(f.risk)}</small>` : ''}${f.verification?.length ? `<br><small>Verify: ${escapeHtml(f.verification.join('; '))}</small>` : ''}</td><td>${suggestion}</td></tr>\n`,
       );
     }
     parts.push(`</tbody>

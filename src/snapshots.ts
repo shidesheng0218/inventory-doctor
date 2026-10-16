@@ -18,6 +18,8 @@ export interface SnapshotInfo {
 export interface LoadedSnapshot extends SnapshotInfo {
   name: string;
   records: InventoryRecord[];
+  // Returned diagnostics, never stdout. Also copied to affected rows' meta.
+  warnings: string[];
 }
 
 // Cheapest possible view of a history: directory listing only. Counting
@@ -35,8 +37,15 @@ export function snapshotRoot(): string {
 }
 
 function dirFor(sourceName: string): string {
+  if (!sourceName.trim() || sourceName === '.' || sourceName === '..' || /[/\\\0]/.test(sourceName)) {
+    throw new Error(`Invalid snapshot source name: ${JSON.stringify(sourceName)}`);
+  }
   const safe = sourceName.replace(/[^\w.-]+/g, '_');
   return join(snapshotRoot(), safe);
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 function idFromDate(date: Date): string {
@@ -45,6 +54,10 @@ function idFromDate(date: Date): string {
 
 export async function saveSnapshot(sourceName: string, records: InventoryRecord[], now: Date = new Date()): Promise<SnapshotInfo> {
   const dir = dirFor(sourceName);
+  const normalized = records.map((record, i) => {
+    const row = normalizeRecord(record, `${sourceName} (record ${i + 1})`, sourceName);
+    return { ...row, meta: { ...row.meta, snapshotVersion: '1', snapshotSource: row.meta['snapshotSource'] ?? row.source } };
+  });
   await mkdir(dir, { recursive: true });
   // Never overwrite an existing snapshot: two saves landing in the same second
   // would otherwise silently destroy history. Suffixed ids keep both.
@@ -54,19 +67,30 @@ export async function saveSnapshot(sourceName: string, records: InventoryRecord[
     id = `${idFromDate(now)}-${n}`;
     path = join(dir, `${id}.jsonl`);
   }
-  const body = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+  const body = normalized.map((r) => JSON.stringify(r)).join('\n') + '\n';
   await writeFile(path, body, 'utf8');
   return { id, path, savedAt: now.toISOString(), recordCount: records.length };
 }
 
 export async function listSnapshotStubs(sourceName: string): Promise<SnapshotStub[]> {
   const dir = dirFor(sourceName);
-  if (!existsSync(dir)) return [];
-  const files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort();
-  return files.map((file) => {
-    const id = file.slice(0, -'.jsonl'.length);
-    return { id, path: join(dir, file), savedAt: savedAtFromId(id) };
-  });
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => ({ id: entry.name.slice(0, -6), path: join(dir, entry.name) }))
+    .filter((entry) => parseSnapshotId(entry.id) !== null)
+    .sort((a, b) => {
+      const left = parseSnapshotId(a.id)!;
+      const right = parseSnapshotId(b.id)!;
+      return left.time - right.time || left.sequence - right.sequence;
+    })
+    .map((entry) => ({ ...entry, savedAt: savedAtFromId(entry.id) }));
 }
 
 export async function listSnapshots(sourceName: string): Promise<SnapshotInfo[]> {
@@ -87,26 +111,58 @@ export interface PruneResult {
   removedIds: string[];
 }
 
-// Delete all but the newest `keep` snapshots of a source. Snapshots are meant
-// to run on a cron forever; without a retention step the directory grows
-// without bound (~0.5 GB/yr for a 5,000-SKU shop). keep defaults to a value
-// that still satisfies the >=3-snapshot minimum the time-series rule needs.
-// Uses stubs (directory listing only) so pruning a long history does not read
-// every file just to delete most of them.
-export async function pruneSnapshots(sourceName: string, keep = 30): Promise<PruneResult> {
+export interface PrunePlan {
+  keep: number;
+  kept: SnapshotStub[];
+  toRemove: SnapshotStub[];
+}
+
+export interface PruneOptions {
+  // Returns the planned counts/ids without deleting anything.
+  dryRun?: boolean;
+}
+
+export class SnapshotPruneError extends Error {
+  constructor(public readonly failedId: string, public readonly result: PruneResult, cause: unknown) {
+    super(`Failed to prune snapshot ${failedId}; already removed ${result.removed}: ${result.removedIds.join(', ') || '(none)'}`, { cause });
+    this.name = 'SnapshotPruneError';
+  }
+}
+
+export async function planPruneSnapshots(sourceName: string, keep = 30): Promise<PrunePlan> {
+  if (!Number.isSafeInteger(keep) || keep < 3) {
+    throw new RangeError('Snapshot keep must be a safe integer >= 3');
+  }
   const stubs = await listSnapshotStubs(sourceName);
-  const keepN = Number.isFinite(keep) && keep > 0 ? Math.floor(keep) : 30;
-  const toRemove = stubs.length > keepN ? stubs.slice(0, stubs.length - keepN) : [];
+  const split = Math.max(0, stubs.length - keep);
+  return { keep, kept: stubs.slice(split), toRemove: stubs.slice(0, split) };
+}
+
+// Directory-only planning; unknown files, directories and symlinks are never
+// candidates. A failed deletion stops immediately and exposes partial progress.
+export async function pruneSnapshots(sourceName: string, keep = 30, options: PruneOptions = {}): Promise<PruneResult> {
+  const plan = await planPruneSnapshots(sourceName, keep);
+  if (options.dryRun) {
+    return { kept: plan.kept.length, removed: plan.toRemove.length, removedIds: plan.toRemove.map((stub) => stub.id) };
+  }
+  const total = plan.kept.length + plan.toRemove.length;
   const removedIds: string[] = [];
-  for (const stub of toRemove) {
+  let vanished = 0;
+  for (const stub of plan.toRemove) {
     try {
       await unlink(stub.path);
       removedIds.push(stub.id);
-    } catch {
-      // A file that vanished between listing and delete is not an error.
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        vanished += 1;
+        continue;
+      }
+      throw new SnapshotPruneError(stub.id, {
+        kept: total - removedIds.length - vanished, removed: removedIds.length, removedIds: [...removedIds],
+      }, error);
     }
   }
-  return { kept: stubs.length - removedIds.length, removed: removedIds.length, removedIds };
+  return { kept: total - removedIds.length - vanished, removed: removedIds.length, removedIds };
 }
 
 // ref resolution: a file path, "<name>@<id-prefix>", or "<name>" (latest).
@@ -158,36 +214,100 @@ export async function loadSnapshotWindow(name: string, maxSnapshots?: number): P
       ? Math.floor(maxSnapshots)
       : undefined;
   const window = max !== undefined && stubs.length > max ? stubs.slice(-max) : stubs;
-  return Promise.all(window.map((s) => loadSnapshot(`${name}@${s.id}`)));
+  return Promise.all(window.map((s) => readSnapshot(name, s.id, s.path)));
 }
 
 async function readSnapshot(name: string, id: string, path: string): Promise<LoadedSnapshot> {
   const content = await readFile(path, 'utf8');
   const savedAt = savedAtFromId(id);
   const records: InventoryRecord[] = [];
+  const warnings: string[] = [];
   const lines = content.split('\n');
   for (const [i, line] of lines.entries()) {
     if (line.trim() === '') continue;
-    let record: InventoryRecord;
+    let parsed: unknown;
     try {
-      record = JSON.parse(line) as InventoryRecord;
+      parsed = JSON.parse(line);
     } catch {
       throw new Error(
         `Corrupt snapshot file ${path} (line ${i + 1}): invalid JSON. Delete the file or re-save the snapshot.`,
       );
     }
+    const record = normalizeRecord(parsed, `${path} (line ${i + 1})`, name, warnings);
     // Re-tag so reports show which snapshot a row came from, and so
     // time-aware rules (nightly-zero) can order snapshots chronologically.
+    record.meta = { ...record.meta, snapshotAt: savedAt, snapshotSource: record.meta['snapshotSource'] ?? record.source, snapshotVersion: record.meta['snapshotVersion'] ?? '0' };
     record.source = `${name}@${id}`;
-    record.meta = { ...record.meta, snapshotAt: savedAt };
     records.push(record);
   }
-  return { name, id, path, savedAt, recordCount: records.length, records };
+  return { name, id, path, savedAt, recordCount: records.length, records, warnings };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// JSON is an untyped boundary. Missing legacy fields become explicit unknowns;
+// malformed fields fail here rather than surfacing as NaN or a rule's .trim crash.
+function normalizeRecord(value: unknown, context: string, fallbackSource: string, warnings?: string[]): InventoryRecord {
+  const invalid = (field: string): never => {
+    throw new Error(`Corrupt snapshot record ${context}: invalid ${field}. Re-save the snapshot.`);
+  };
+  if (!isObject(value)) return invalid('record (expected an object)');
+  const nullableString = (field: string): string | null => {
+    const fieldValue = value[field];
+    if (fieldValue === undefined || fieldValue === null) return null;
+    return typeof fieldValue === 'string' ? fieldValue : invalid(field);
+  };
+  const nullableBoolean = (field: string): boolean | null => {
+    const fieldValue = value[field];
+    if (fieldValue === undefined || fieldValue === null) return null;
+    return typeof fieldValue === 'boolean' ? fieldValue : invalid(field);
+  };
+  const quantity = value['quantity'] ?? null;
+  if (quantity !== null && (typeof quantity !== 'number' || !Number.isSafeInteger(quantity))) {
+    return invalid('quantity (expected a safe integer or null)');
+  }
+  const source = value['source'] === undefined ? fallbackSource : nullableString('source');
+  if (source === null || !source.trim()) return invalid('source');
+  const quantityRaw = value['quantityRaw'] === undefined
+    ? (quantity === null ? '' : String(quantity))
+    : nullableString('quantityRaw');
+  if (quantityRaw === null) return invalid('quantityRaw');
+  const meta: Record<string, string> = {};
+  if (value['meta'] !== undefined) {
+    if (!isObject(value['meta'])) return invalid('meta');
+    for (const [key, entry] of Object.entries(value['meta'])) {
+      if (typeof entry !== 'string') return invalid(`meta.${key}`);
+      Object.defineProperty(meta, key, { value: entry, enumerable: true, writable: true, configurable: true });
+    }
+  }
+  const cellIsBlank = nullableBoolean('cellIsBlank');
+  if (value['cellIsBlank'] === undefined || (warnings !== undefined && meta['snapshotVersion'] === undefined)) {
+    const message = `Legacy snapshot record ${context}: unknown source/version or blank-cell provenance; missing cellIsBlank is treated as null, never inferred from quantityRaw.`;
+    warnings?.push(message);
+    meta['snapshotWarning'] = message;
+  } else if (meta['snapshotWarning']) {
+    warnings?.push(meta['snapshotWarning']);
+  }
+  return {
+    source, sku: nullableString('sku'), barcode: nullableString('barcode'),
+    title: nullableString('title'), location: nullableString('location'),
+    quantity, quantityRaw, cellIsBlank, tracked: nullableBoolean('tracked'), meta,
+  };
+}
+
+function parseSnapshotId(id: string): { savedAt: string; time: number; sequence: number } | null {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-([1-9]\d*))?$/.exec(id);
+  if (!match) return null;
+  const savedAt = `${match[1]}:${match[2]}:${match[3]}`;
+  const time = Date.parse(`${savedAt}Z`);
+  const sequence = match[4] === undefined ? 1 : Number(match[4]);
+  if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 19) !== savedAt
+    || !Number.isSafeInteger(sequence) || (match[4] !== undefined && sequence < 2)) return null;
+  return { savedAt, time, sequence };
 }
 
 function savedAtFromId(id: string): string {
-  // id "2026-09-05T14-30-00" → ISO "2026-09-05T14:30:00"; a collision suffix
-  // ("...-2") is ignored so ordering keys stay comparable across ids.
-  const m = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-\d+)?$/.exec(id);
-  return m ? `${m[1]}:${m[2]}:${m[3]}` : id;
+  return parseSnapshotId(id)?.savedAt ?? id;
 }

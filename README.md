@@ -1,12 +1,12 @@
 # inventory-doctor
 
-Multi-source inventory sync diagnostics — **find the SKUs you're overselling without knowing it.**
+Multi-source inventory sync diagnostics — **separate observed inventory differences from conditional selling risk.**
 
 Compare two inventory snapshots (CSV exports or live Shopify stores) and get a report of everything that doesn't line up: SKU mismatches, oversell risk, blank cells masquerading as zeros, barcode conflicts, and more.
 
 **Your data never leaves your machine.** CSV files are parsed locally; Shopify API calls go directly from your computer to your own stores over HTTPS. There is no server, no telemetry, no upload.
 
-**Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes anything: it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
+**Not a sync tool — an auditor for sync tools.** Trunk, Syncio, Synkro and friends *write* to your inventory (and their own reviews show they sometimes get it wrong). inventory-doctor never writes inventory to a commerce API (it can save local snapshots/proposals and send explicitly configured webhooks): it is the independent, read-only reconciliation layer you run alongside whatever sync app you use. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full comparison.
 
 **Built for agentic commerce.** AI-buyer traffic is growing fast — agent-initiated store visits are up ~393% year over year — and AI buyers are cancellation-intolerant: one oversell is a failed order and a merchant record that buying agents learn to avoid, not a disappointed human who might come back. Meanwhile every sync engine in your stack is *writing* to your inventory around the clock. Every sync-app user needs an independent audit layer, and inventory-doctor is the read-only reconciliation layer built to be exactly that. See [docs/competitive-analysis.md](docs/competitive-analysis.md) for the full landscape.
 
@@ -37,68 +37,73 @@ npx tsx src/cli.ts diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.cs
 inventory-doctor diff a.csv b.csv
 ```
 
-## What it looks like
-
-Running `inventory-doctor diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv` against the bundled sample files (which deliberately contain one of every problem):
-
-```
-inventory-doctor — sync diagnosis
-============================================================
-Sources: shopify-store-a  vs  shopify-store-b
-  shopify-store-a: 13 records
-  shopify-store-b: 12 records
-
-Sync health score: 33/100
-  exact match: 5 · minor drift: 0 · severe drift: 4 · unmatched: 6 (of 15)
-
-CRITICAL (8)
-------------------------------------------------------------
-[CRITICAL] SKU "DUP-100" appears 2 times in shopify-store-a with different quantities
-[CRITICAL] SKU "ORPHAN-A" exists in shopify-store-a but is missing from shopify-store-b
-[CRITICAL] "OVER-1" is out of stock in shopify-store-a (0) but shows 8 available in
-           shopify-store-b — you may be selling stock you don't have
-[CRITICAL] "BLANK-1" has a BLANK quantity cell in shopify-store-a (not "0") while
-           shopify-store-b tracks a real quantity — an import may read this as 0
-[CRITICAL] Barcode 9999999 maps to 2 different SKUs across sources
-           ("BC-A" in shopify-store-a vs "BC-B" in shopify-store-b)
-...
-
-WARNING (5)
-------------------------------------------------------------
-[WARN]     SKU differs only by letter case: "ABC-123" (a) vs "abc-123" (b)
-[WARN]     SKU matches only after removing whitespace/invisible characters
-[WARN]     "CONT-1" allows overselling ("continue selling when out of stock") with quantity 0
-...
-
-INFO (3)
-------------------------------------------------------------
-[INFO]     Possible prefix/suffix variant: "GHI-789" (a) vs "SHOP-GHI-789" (b)
-[INFO]     Sync health score: 33/100 — 5 exact, 0 minor drift, 4 severe drift, 6 unmatched
-[INFO]     "UNTRACKED-1" has inventory tracking OFF in shopify-store-a but is
-           stock-managed in shopify-store-b
-```
-
-The full output is checked in as [`fixtures/expected-report.md`](fixtures/expected-report.md) — it's a living document verified by the test suite.
-
-The exit code is `1` when critical findings exist, so you can wire this into CI or a cron job.
-
-## Fix export — from finding to fix
-
-`--fix-export` turns critical findings into a Shopify-importable inventory CSV that brings the **second** source in line with the **first** (the source of truth):
+## Zero-credential demo
 
 ```bash
-inventory-doctor diff a.csv b.csv --fix-export fix.csv
-# → fix direction: bring "b" in line with "a" (first source = source of truth)
-# → review fix.csv, verify it, then import it into b
+npx -y inventory-doctor demo                  # published package; no checkout or credentials
+npm run demo -- --format json                # this checkout
+npx tsx src/cli.ts demo --format markdown
 ```
 
-**Watch the direction.** With mixed flags the "first" source is not necessarily the first flag you typed — precedence is: positional files, then `--csv`, then `--store`/`--woo`, then `--baseline`. The run always prints the direction before writing, so check that line.
+The bundled fixtures are **synthetic demonstration data**, not verified incidents.
+`demo` uses `fixtures/demo-config.json` to declare the example's shared-stock
+assumption and exits 0 even with deliberately seeded critical findings. Ordinary
+`diff` exits 1 for critical findings, 2 for errors, otherwise 0.
 
-The tool never writes to any API. The fix is a file you can read, diff, and re-check before importing — the run prints the exact verify command (`inventory-doctor diff <truth-source> fix.csv`), so you can prove the fix would heal the report first. An auditable fix, not a silent mutation. Critical findings that an inventory import cannot fix (e.g. a SKU missing from the target entirely) are called out explicitly instead of being silently dropped.
+## Facts, risks and quantity prerequisites
+
+Findings separate `evidence` (observations in supplied records), `risk`
+(conditional consequences), `assumptions`, and `verification` steps. A critical
+finding means urgent verification, not proof of an accepted oversell, lost stock,
+a failed sync app, or an incorrect source. Health score measures agreement in the
+compared data, not physical availability or order fulfillment accuracy.
+
+Before comparing quantities, establish the same stock pool, quantity state
+(**available**, not on-hand/reserved/committed), capture time, SKU identity,
+location and unit of measure. Shopify adapters prefer explicit available columns;
+unknown/generic quantity semantics must be checked by the operator. CSV blank
+cells, absent/untracked API quantities, and numeric zero remain distinct. A
+missing quantity is never evidence of zero stock.
+
+By default `rules.inventoryRelationship` is `"unknown"`. Set it to `"shared"`
+only when the sources really represent the same stock pool; use `"independent"`
+for separate pools. `rules.allowBackorders: true` records intentional backorders
+and reduces urgency without changing observations. Example config:
+
+```json
+{ "rules": { "inventoryRelationship": "shared", "allowBackorders": false } }
+```
+
+## Fix export — an audit review proposal, not an import
+
+`--fix-export` writes a **non-importable review proposal CSV**, including baseline
+and target observed values, proposed available quantity when reviewable, raw
+quantity evidence, quantity basis, review status, and blocked reasons. The first
+source is a **human-selected baseline, never verified truth**. Nothing is applied
+to inventory; even an unblocked proposal requires human verification.
+
+```bash
+inventory-doctor diff a.csv b.csv --fix-export review.csv
+# stderr: review direction, baseline assumption, review-required/blocked counts
+# review.csv is NOT a Shopify import file
+# existing files are protected; --force explicitly permits replacement
+```
+
+**Watch source order.** CLI precedence is positional files, then `--csv`, then
+`--store`, then `--woo`, then `--baseline` — not the textual order of mixed flags.
+The printed direction names the resolved baseline and target. Ambiguous matches,
+missing SKUs, unknown quantities, location aggregates/mismatches and unsupported
+quantity bases may block a proposal. Consult each proposal's blocked reasons;
+there is no promise that every finding can produce a quantity suggestion.
+
+Do not diff the proposal CSV as if it were a verified inventory snapshot, or
+import it as a repair. Check original records, reservations, orders, transfers,
+location mapping and a physical count, then use a platform-specific approved
+workflow if a change is warranted. Re-read actual inventory afterward.
 
 ## Snapshots — time-series diagnosis
 
-A single diff compares two snapshots taken now. Saving snapshots over time unlocks the time-series rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — the silent-wipe pattern a one-off diff cannot see.
+A single diff compares two snapshots taken now. Saving snapshots over time unlocks the time-series rule (`nightly-zero`): "this SKU was in stock every day and suddenly reads 0" — a suspicious observation a one-off diff cannot see. It does not prove a wipe or its cause.
 
 ```bash
 inventory-doctor snapshot save store-a.csv            # or: --store store-a via snapshot save store:store-a
@@ -140,6 +145,24 @@ the recent past, and every loaded record costs memory (~300 bytes, measured):
 ```bash
 inventory-doctor snapshot check shopify-store-a --window 30
 ```
+
+`--window` for both `snapshot check` and `snapshot history` must be a positive
+safe integer (decimal digits only); fractions, exponents, zero and invalid text
+are errors, not silently rounded or interpreted as “all”. Detection requires at
+least three loaded snapshots; a smaller window is allowed but cannot diagnose
+the time-series pattern.
+
+```bash
+inventory-doctor snapshot history shopify-store-a SKU-1 --window 30
+inventory-doctor snapshot prune shopify-store-a --keep 30            # preview
+inventory-doctor snapshot prune shopify-store-a --keep 30 --dry-run  # preview
+inventory-doctor snapshot prune shopify-store-a --keep 30 --yes      # delete candidates
+```
+
+`--keep` must be a safe integer >=3. Prune is preview-only unless `--yes` is
+explicitly supplied; `--dry-run` and `--yes` cannot be combined. The plan lists
+candidate IDs/paths before deletion. Retention removes local history permanently;
+back it up first. It does not change store inventory.
 
 A year of daily snapshots of a 5,000-SKU shop is ~0.5 GB on disk; loading all
 of it would need ~510 MB of RAM. With `--window 30` the run stays around 45 MB
@@ -184,15 +207,15 @@ collect the report. See `.github/workflows/example-inventory-check.yml` for a
 self-contained run (it diffs this repo's fixtures nightly, with
 `fail-on-critical: false` since the fixtures intentionally contain criticals).
 
-## The nine diagnostic rules
+## The nine diagnostic rules (observations and conditional risks)
 
 | Rule | What it catches | Severity |
 | --- | --- | --- |
 | `sku-mismatch` | Case-only / whitespace / prefix-suffix SKU variants, orphan SKUs, one-to-many duplicates within one source | info → critical |
 | `oversell-risk` | Quantity ≤ 0 on one side but > 0 on the other; "continue selling when out of stock" with empty stock; drift beyond threshold | warning → critical |
-| `oversold` | Negative available quantity — orders already accepted for stock that does not exist. Needs no second source, so a single store gets this on day one | critical |
-| `blank-vs-zero` | A **blank** quantity cell vs an explicit `0` — the classic "bulk import wiped my inventory" root cause | critical |
-| `barcode-crosscheck` | Same barcode, different SKUs across sources — silent mapping misconfiguration | critical |
+| `oversold` | Negative reported available quantity — investigate reservations, backorders and reconciliation; not proof of accepted orders or nonexistent physical stock. Needs no second source, so a single store gets this on day one | critical |
+| `blank-vs-zero` | A **blank** quantity cell vs an explicit `0` — an import-risk indicator, not proof that an import wiped inventory | critical |
+| `barcode-crosscheck` | Same barcode, different SKUs across sources — possible mapping conflict requiring verification | critical |
 | `quantity-drift` | Overall sync health: % exact / minor drift / severe drift / unmatched → health score 0–100 | info |
 | `untracked` | Inventory tracking disabled in one source while another manages stock | info |
 | `nightly-zero` | Time-series across saved snapshots: a SKU with a stable positive history suddenly reading 0 ("silently zeroed overnight"), vanishing, or dropping suspiciously fast | warning → critical |
@@ -320,13 +343,22 @@ Add to your `.mcp.json`:
 }
 ```
 
-Three tools are registered:
+Six tools are registered:
 
 - `diff_inventory(sourceA, sourceB, configPath?, maxFindings?)` — full diagnosis, returns the JSON report. Findings are capped at `maxFindings` (default 100) so a large catalog cannot flood the agent's context; on truncation the payload carries `totalFindings` and points at `explain_sku` for the remainder.
 - `explain_sku(sku, sources, configPath?)` — one SKU's raw values and findings across all sources (for follow-up questions)
-- `inventory_health(sources, configPath?)` — lightweight health-score summary
+- `inventory_health(sources, configPath?)` — lightweight agreement-score summary, not proof of stock correctness
+- `sku_history(sku, snapshotName, maxSnapshots?)` — canonical SKU matching; per-snapshot/location observed quantity points. `null` is unknown, not zero; absent records produce no point. `found=false` refers only to the loaded window.
+- `snapshot_check(snapshotName, maxSnapshots?)` — observed time-series changes with evidence/risk/assumptions/verification, loaded snapshot metadata, `totalSnapshots` and `windowed`. Needs >=3 loaded snapshots for findings.
+- `fix_export(sourceA, sourceB, configPath?)` — review proposal only, including `direction`, `reviewRequired: true`, `importable: false`, `proposals` (including blocked reasons and baseline/target evidence), `rows`, `csv`, `basis`, risk/assumptions/verification. Returns text; writes no file or inventory.
 
-Every source argument accepts either a **CSV file path**, **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars), or **`snapshot:<name>[@<id>]`** (a saved snapshot) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
+`maxSnapshots` is an optional positive safe integer; omitted means all saved
+snapshots. Both source arrays must be nonempty. Findings returned by
+`diff_inventory`, `explain_sku`, and `snapshot_check` retain the diagnostic
+`evidence`, `risk`, `assumptions`, and `verification` fields; read those before
+recommending action.
+
+Every source argument accepts a **CSV file path**, **`woo:<name>`** (configured WooCommerce), **`store:<name>`** (a store from `inventory-doctor.json`, credentials resolved from env vars), or **`snapshot:<name>[@<id>]`** (a saved snapshot) — so an agent can diff two live stores, or a store against a CSV, in one call. `configPath` is only needed when the config file is not in a default location.
 
 stdout is reserved for JSON-RPC; all logging goes to stderr.
 
@@ -341,7 +373,7 @@ stdout is reserved for JSON-RPC; all logging goes to stderr.
 
 ```bash
 npm test             # vitest — rules, CSV adapters, token cache, throttle logic
-npm run dev -- diff fixtures/shopify-store-a.csv fixtures/shopify-store-b.csv
+npm run demo -- --format json
 npm run build        # tsc + shebang
 npm run check:stdout # guards the MCP stdout discipline
 ```

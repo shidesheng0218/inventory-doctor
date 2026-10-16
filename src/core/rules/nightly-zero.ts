@@ -56,16 +56,20 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
         rule: 'nightly-zero',
         severity: 'warning',
         sku: rawSku,
-        message: `"${rawSku}" had stock in ${stockedEarlier.length} consecutive snapshots but is missing from the latest (${latest}) — the listing may have been deleted or the export dropped it`,
+        message: `"${rawSku}" had stock in ${stockedEarlier.length} consecutive snapshots but has no numeric quantity in the latest (${latest})`,
         detail: { sku: rawSku, latest, history },
-        suggestion: 'Check whether the product/variant still exists and is included in the export or sync scope.',
+        suggestion: 'Check whether the product/variant still exists, has a numeric quantity and is included in the export or sync scope.',
+        evidence: [`Earlier quantities: ${history}.`, `No numeric quantity for this SKU at ${latest}.`],
+        risk: 'If the SKU should remain within the same export scope, inventory visibility may be incomplete; absence or null quantity does not prove deletion or zero stock.',
+        assumptions: ['Snapshots cover the same inventory and locations with comparable export scope.'],
+        verification: ['Check product existence, tracking settings, export filters and snapshot completeness.'],
       });
       continue;
     }
 
     if (latestPoint.quantity === 0) {
       // Explicit zero in the latest snapshot after a stable positive history.
-      // A gradual sell-through shows a declining trend first; a cliff does not.
+      // This heuristic selects a large change, not its business cause.
       const maxEarlier = Math.max(...stockedEarlier.map((e) => e.point?.quantity ?? 0));
       const stableBeforeCliff = lastStocked >= maxEarlier / 2;
       if (stableBeforeCliff) {
@@ -73,9 +77,13 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
           rule: 'nightly-zero',
           severity: 'critical',
           sku: rawSku,
-          message: `"${rawSku}" was stocked across ${stockedEarlier.length} snapshots (last: ${lastStocked}) but reads 0 in the latest (${latest}) — the classic "silently zeroed overnight" pattern`,
+          message: `"${rawSku}" was stocked across ${stockedEarlier.length} snapshots (last: ${lastStocked}) but reads 0 in the latest (${latest})`,
           detail: { sku: rawSku, latest, history, lastStocked },
-          suggestion: 'Verify against the warehouse/system of record before trusting the zero; check recent bulk imports and sync-app runs from the past day.',
+          suggestion: 'Verify physical stock and reconcile sales, transfers, adjustments and sync/import logs between the snapshots before changing the zero.',
+          evidence: [`Earlier quantities: ${history}.`, `Latest reported aggregate at ${latest}: 0.`],
+          risk: 'If the zero is unintended, it may suppress availability or propagate through sync. Sales, transfers, adjustments or an import could also explain it; the cause is not established.',
+          assumptions: ['Snapshots cover the same inventory and locations; aggregate zero does not establish every location is zero.'],
+          verification: ['Check orders, transfers, reservations, adjustments, physical counts and sync/import logs over the actual snapshot interval.'],
         });
         continue;
       }
@@ -86,9 +94,13 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
         rule: 'nightly-zero',
         severity: 'warning',
         sku: rawSku,
-        message: `"${rawSku}" dropped from ${lastStocked} to ${latestPoint.quantity} between the last two snapshots — a sharper fall than normal sell-through usually looks like`,
+        message: `"${rawSku}" dropped from ${lastStocked} to ${latestPoint.quantity} between the last two snapshots`,
         detail: { sku: rawSku, latest, history, lastStocked, latestQuantity: latestPoint.quantity },
-        suggestion: 'Confirm the drop matches actual sales; if not, look for a sync or import that halved the count.',
+        suggestion: 'Reconcile the change with sales, transfers, reservations, adjustments and imports between these snapshots.',
+        evidence: [`Earlier quantities: ${history}.`, `Latest reported aggregate at ${latest}: ${latestPoint.quantity}.`],
+        risk: 'If unexplained by inventory activity, this reduction may indicate an incorrect adjustment; the size of the drop alone does not distinguish sales from a sync error.',
+        assumptions: ['Snapshots cover the same inventory and locations with comparable quantity semantics.'],
+        verification: ['Compare the interval with order, transfer, reservation, adjustment and import records.'],
       });
     }
   }

@@ -21,11 +21,11 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'diff_inventory',
-    'Compare inventory across two sources (CSV files and/or configured Shopify stores) and report sync problems (SKU mismatches, oversell risk, oversold stock, blank-vs-zero cells, barcode conflicts, drift). Findings are capped (maxFindings) to keep the payload small; use explain_sku for per-SKU follow-ups.',
+    'Compare two CSV, Shopify, WooCommerce or snapshot sources. Return observed differences and conditional risks, not confirmed incidents; findings include evidence, risk, assumptions and verification. Findings are capped (maxFindings) to keep the payload small; use explain_sku for per-SKU follow-ups.',
     {
       sourceA: z.string().describe(SOURCE_DESC),
       sourceB: z.string().describe(SOURCE_DESC),
-      configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+      configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
       maxFindings: z
         .number()
         .int()
@@ -57,8 +57,8 @@ export function createMcpServer(): McpServer {
     'Show one SKU across all sources: raw values, quantities, tracking state, and the findings that mention it.',
     {
       sku: z.string().describe('The SKU to explain'),
-      sources: z.array(z.string()).describe(`Sources to search — each is a ${SOURCE_DESC}`),
-      configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+      sources: z.array(z.string()).min(1).describe(`Sources to search — each is a ${SOURCE_DESC}`),
+      configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
     },
     async ({ sku, sources, configPath }) => {
       const explanation = await explainSku(sku, sources.map(parseSourceArg), { configPath });
@@ -70,8 +70,8 @@ export function createMcpServer(): McpServer {
     'inventory_health',
     'Lightweight sync-health summary for one or more sources: health score, drift distribution, finding counts by severity.',
     {
-      sources: z.array(z.string()).describe(`Sources — each is a ${SOURCE_DESC}`),
-      configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+      sources: z.array(z.string()).min(1).describe(`Sources — each is a ${SOURCE_DESC}`),
+      configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
     },
     async ({ sources, configPath }) => {
       const health = await inventoryHealth(sources.map(parseSourceArg), { configPath });
@@ -81,11 +81,11 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'sku_history',
-    'Trace one SKU across the saved snapshots of a source: per-snapshot quantity series, expanded per location. quantity null means a blank cell (not zero), so "went to zero" vs "stopped being reported" stay distinguishable. found=false means the SKU never appears (points is empty).',
+    'Trace one SKU across the saved snapshots of a source: per-snapshot quantity series, expanded per location. quantity null means unknown/unreported (a blank CSV cell or unavailable API quantity), never zero. Missing snapshot points are not synthetic zeros. found=false means no matching records in the loaded window; it does not prove the SKU never existed.',
     {
       sku: z.string().describe('The SKU to trace (matched canonically: case/width-insensitive)'),
       snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
-      maxSnapshots: z.number().int().min(1).optional().describe('Only load the newest N snapshots (default: all)'),
+      maxSnapshots: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('Only load the newest N snapshots (default: all)'),
     },
     async ({ sku, snapshotName, maxSnapshots }) => {
       const history = await skuHistory(sku, snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
@@ -95,10 +95,10 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'snapshot_check',
-    'Time-series diagnosis over the saved snapshots of one source: catches a SKU that was stocked for days and is suddenly zeroed or missing ("silently zeroed overnight") — the pattern a one-off diff cannot see. Needs ≥3 saved snapshots.',
+    'Time-series diagnosis over a saved snapshot window: flags observed zero, disappearance or abrupt quantity drops with evidence, conditional risk, assumptions and verification. Does not establish a sync failure or physical stock loss. Needs ≥3 loaded snapshots; maxSnapshots=1 or 2 returns no time-series findings.',
     {
       snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
-      maxSnapshots: z.number().int().min(1).optional().describe('Only load the newest N snapshots (default: all)'),
+      maxSnapshots: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('Only load the newest N snapshots (default: all)'),
     },
     async ({ snapshotName, maxSnapshots }) => {
       const result = await runSnapshotCheck(snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
@@ -108,24 +108,29 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'fix_export',
-    'Turn the critical findings of a two-source diff into a Shopify-importable inventory CSV that brings the SECOND source in line with the FIRST (the source of truth). Returns the CSV as text — review it before importing; nothing is written anywhere. direction reminds you which side is the source of truth.',
+    'Build an audit review proposal for sourceB using sourceA as a human-selected baseline, not verified truth. Returns non-importable review CSV, proposals including blocked reasons, raw evidence and verification steps. No file or inventory is written; never import the CSV as a repair file.',
     {
-      sourceA: z.string().describe(`${SOURCE_DESC} — this is the SOURCE OF TRUTH the other side is aligned to`),
-      sourceB: z.string().describe(`${SOURCE_DESC} — this side receives the fix`),
-      configPath: z.string().optional().describe('Path to inventory-doctor.json (only needed for store: sources)'),
+      sourceA: z.string().describe(`${SOURCE_DESC} — human-selected comparison baseline, not verified truth`),
+      sourceB: z.string().describe(`${SOURCE_DESC} — target considered for review, never automatically changed`),
+      configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
     },
     async ({ sourceA, sourceB, configPath }) => {
       const { report, sources } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath });
       const records = sources.flatMap((s) => s.records);
       const fix = buildFixExport(report, records);
       const payload = {
-        direction: `align "${fix.targetSource}" (sourceB) to "${report.sources[0]}" (sourceA, the source of truth)`,
+        ...fix,
+        direction: `review "${fix.targetSource}" (sourceB) against "${fix.truthSource}" (sourceA, human-selected baseline; not verified truth)`,
         fixRows: fix.rows.length,
-        note:
-          fix.rows.length === 0
-            ? 'No importable fixes — critical findings either have no safe write or affect the truth side.'
-            : 'Review this CSV, then import it into the target source. Verify first: diff sourceA against this CSV.',
-        csv: fix.csv,
+        evidence: fix.proposals.map((p) => ({ sku: p.sku, location: p.location, baseline: p.truthEvidence, target: p.targetEvidence })),
+        risk: 'A quantity difference does not establish physical stock, an accepted oversell, or which source is correct. Applying an unverified proposal can corrupt inventory.',
+        assumptions: [fix.basis],
+        verification: [
+          'Confirm the baseline and target represent the same stock pool, quantity state, time and location.',
+          'Check original source records, reservations, orders, transfers and a physical count before choosing a quantity.',
+          'Resolve every blocked reason. Use a platform-specific workflow only after human approval; this CSV is not an import file.',
+        ],
+        note: 'Review proposal only. reviewRequired=true; importable=false. No inventory or files were written.',
       };
       return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
     },

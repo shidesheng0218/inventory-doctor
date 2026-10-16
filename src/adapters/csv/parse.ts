@@ -5,48 +5,69 @@ export interface ParsedCsv {
   rows: Array<Record<string, string>>;
 }
 
-// Parse CSV/TSV keeping EVERY cell a string: dynamic typing stays off so
-// "0" remains "0" and "" remains "" — the blank-vs-zero distinction the whole
-// tool is built on. Delimiter is auto-detected (comma or tab).
-export function parseCsvContent(content: string): ParsedCsv {
-  const result = Papa.parse<Record<string, string>>(content, {
-    header: true,
+// Parse positional cells first: header mode can silently rename duplicate headers
+// or overwrite their values. Keep data-row numbers stable (excluding blank rows).
+export function parseCsvContent(content: string, source = 'CSV'): ParsedCsv {
+  const result = Papa.parse<string[]>(content, {
     dynamicTyping: false,
     skipEmptyLines: 'greedy',
-    transformHeader: (h) => h.trim(),
-    transform: (v) => v,
   });
-  const headers = (result.meta.fields ?? []).filter((h) => h !== '');
-  return { headers, rows: result.data };
+  const structuralError = result.errors.find((error) => error.code !== 'UndetectableDelimiter');
+  if (structuralError) {
+    const row = structuralError.row;
+    const cells = row === undefined ? undefined : result.data[row];
+    const column = cells?.length;
+    const value = cells?.[cells.length - 1];
+    throw new Error(`Invalid CSV in ${source}${row === undefined ? '' : ` at ${row === 0 ? 'header' : `data row ${row}`}`}${column === undefined ? '' : `, column ${column}, value ${JSON.stringify(value)}`}: ${structuralError.code}: ${structuralError.message}`);
+  }
+  const [rawHeaders = [], ...data] = result.data;
+  const headers = rawHeaders.map((h) => h.trim());
+  const seen = new Set<string>();
+  for (const [index, header] of headers.entries()) {
+    if (!header) throw new Error(`Invalid CSV in ${source}: empty header at column ${index + 1}`);
+    const key = header.toLowerCase();
+    if (seen.has(key)) throw new Error(`Invalid CSV in ${source}: duplicate header ${JSON.stringify(header)} at column ${index + 1}`);
+    seen.add(key);
+  }
+  const rows = data.map((cells, index) => {
+    if (cells.length !== headers.length) {
+      const column = cells.length > headers.length ? headers.length + 1 : cells.length + 1;
+      throw new Error(`Invalid CSV in ${source} at data row ${index + 1}, column ${column}: expected ${headers.length} columns, got ${cells.length}; values ${JSON.stringify(cells)}`);
+    }
+    if (cells.every((cell, i) => cell.trim().toLowerCase() === headers[i]!.toLowerCase())) {
+      throw new Error(`Invalid CSV in ${source} at data row ${index + 1}: repeated header row ${JSON.stringify(cells)}`);
+    }
+    return Object.fromEntries(headers.map((header, i) => [header, cells[i]!]));
+  });
+  return { headers, rows };
 }
 
-// Cell value → quantity + whether the cell was genuinely blank. Blank (empty
-// or whitespace-only) becomes null and stays distinguishable from an explicit
-// "0" via quantityRaw. `isBlank` is the CSV-only signal that the blank-vs-zero
-// rule keys on — an API source never sets it (a null quantity there means
-// "not tracked", not "empty cell").
-//
-// Thousands separators: "1,234" is a common ERP export shape and must read as
-// 1234, not 1. Only the unambiguous grouped form (-?\d{1,3}(,\d{3})+) is
-// stripped — "1,5" / "12,34" (possible decimal-comma) are left alone so they
-// stay null and surface as unreadable rather than being silently misread.
-const THOUSANDS_RE = /^-?\d{1,3}(,\d{3})+$/;
+// Only decimal safe integers, optionally signed and properly comma-grouped.
+// Blank remains null, never zero; malformed nonblank input is an error.
+const INTEGER_RE = /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$/;
 
 export function parseQuantity(raw: string | undefined): { quantity: number | null; quantityRaw: string; isBlank: boolean } {
   const quantityRaw = raw ?? '';
-  const isBlank = quantityRaw.trim() === '';
+  const text = quantityRaw.trim();
+  const isBlank = text === '';
   if (isBlank) return { quantity: null, quantityRaw, isBlank };
+  const quantity = Number(text.replace(/,/g, ''));
+  if (!INTEGER_RE.test(text) || !Number.isSafeInteger(quantity)) {
+    throw new Error(`Invalid quantity ${JSON.stringify(quantityRaw)}: expected a decimal safe integer (optionally grouped thousands)`);
+  }
+  return { quantity, quantityRaw, isBlank };
+}
 
-  let text = quantityRaw.trim();
-  if (THOUSANDS_RE.test(text)) text = text.replace(/,/g, '');
-
-  const n = Number(text);
-  if (!Number.isFinite(n)) return { quantity: null, quantityRaw, isBlank };
-  return { quantity: Math.trunc(n), quantityRaw, isBlank };
+export function parseQuantityCell(parsed: ParsedCsv, row: Record<string, string>, header: string | undefined, source: string, rowIndex: number) {
+  if (!header) throw new Error(`Invalid CSV in ${source}: no quantity column could be identified`);
+  try {
+    return parseQuantity(row[header]);
+  } catch (error) {
+    throw new Error(`Invalid CSV in ${source} at data row ${rowIndex + 1}, column ${parsed.headers.indexOf(header) + 1} (${JSON.stringify(header)}), value ${JSON.stringify(row[header])}: ${(error as Error).message}`);
+  }
 }
 
 export function blankToNull(raw: string | undefined): string | null {
   if (raw === undefined) return null;
-  const trimmed = raw.trim();
-  return trimmed === '' ? null : raw;
+  return raw.trim() === '' ? null : raw;
 }

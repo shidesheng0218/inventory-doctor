@@ -30,8 +30,8 @@ export function quantityDrift(
       detail: { ...summary, healthScore: score },
       suggestion:
         summary.severeDrift > 0 || summary.unmatched > 0
-          ? 'Fix severe drift and orphan SKUs first; they are where oversells and lost sales live.'
-          : 'Inventory is broadly in sync. Schedule regular diffs to keep it that way.',
+          ? 'Review large differences and unmatched records first; verify shared stock, catalog scope and quantity semantics before treating them as sync failures.'
+          : 'Supplied quantities broadly agree within the comparison thresholds. Confirm scope and capture times, and schedule regular comparisons.',
     },
   ];
 }

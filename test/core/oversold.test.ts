@@ -8,19 +8,19 @@ import { rec } from '../helpers.js';
 // Everything else in R2 compared two systems against each other.
 
 describe('R8 oversold (negative availability)', () => {
-  it('reports how badly the SKU is oversold, per location', () => {
+  it('reports negative quantity without inferring accepted orders, per location', () => {
     const findings = oversold([rec({ source: 'shop', sku: 'SKU-1', quantity: -3, location: 'Main' })]);
 
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ rule: 'oversold', severity: 'critical', sku: 'SKU-1' });
-    expect(findings[0]?.message).toContain('oversold by 3 units');
+    expect(findings[0]?.message).toContain('negative quantity -3');
     expect(findings[0]?.detail['short']).toBe(3);
     expect(findings[0]?.detail['location']).toBe('Main');
   });
 
-  it('uses the singular for a one-unit oversell', () => {
+  it('reports a one-unit negative quantity', () => {
     const findings = oversold([rec({ source: 'shop', sku: 'SKU-1', quantity: -1 })]);
-    expect(findings[0]?.message).toContain('oversold by 1 unit ');
+    expect(findings[0]?.message).toContain('negative quantity -1');
   });
 
   it('keeps two oversold shelves as two separate problems', () => {
@@ -68,10 +68,10 @@ describe('R2 continue-selling on a single source', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.message).toContain('continue selling');
     // Single-source wording: there is no "other source" to blame.
-    expect(findings[0]?.suggestion).toContain('orders are accepted');
+    expect(findings[0]?.suggestion).toContain('check whether orders can actually be placed');
   });
 
-  it('reports the row once even when several sources carry it', () => {
+  it('retains a separate policy observation for every source', () => {
     const findings = oversellRisk([
       rec({ source: 'a', sku: 'SKU-1', quantity: 0, meta: { inventoryPolicy: 'continue' } }),
       rec({ source: 'b', sku: 'SKU-1', quantity: 0, meta: { inventoryPolicy: 'continue' } }),
@@ -79,9 +79,9 @@ describe('R2 continue-selling on a single source', () => {
     ]);
     const policy = findings.filter((f) => f.message.includes('continue selling'));
 
-    expect(policy).toHaveLength(1);
+    expect(policy).toHaveLength(3);
     // Multi-source wording is kept for the two-system case.
-    expect(policy[0]?.suggestion).toContain('the other source does not also count');
+    expect(policy[0]?.suggestion).toContain('backorder lead times');
   });
 
   it('stays quiet while stock is on hand', () => {

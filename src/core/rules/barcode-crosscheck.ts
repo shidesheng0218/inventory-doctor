@@ -32,9 +32,9 @@ export function barcodeCrosscheck(records: InventoryRecord[]): Finding[] {
       rule: 'barcode-crosscheck',
       severity: 'critical',
       sku: entries[0]?.sku ?? null,
-      message: `Barcode ${barcode} maps to ${skuKeys.size} different SKUs across sources (${entries.map((e) => `"${e.sku}" in ${e.source}`).join(' vs ')}) — the SKU mapping is likely misconfigured`,
+      message: `Barcode ${barcode} maps to ${skuKeys.size} different SKUs across sources (${entries.map((e) => `"${e.sku}" in ${e.source}`).join(' vs ')})`,
       detail: { barcode, entries },
-      suggestion: 'These records share one barcode, so they are almost certainly the same product. Align the SKU in all sources, or fix the barcode on the wrong record.',
+      suggestion: 'Verify product identity and barcode reuse first; align SKU mappings or correct a barcode only after confirming the intended identifiers.',
     });
   }
 

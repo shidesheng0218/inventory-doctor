@@ -31,7 +31,7 @@ export function untracked(records: InventoryRecord[]): Finding[] {
       sku: r.sku,
       message: `"${r.sku}" has inventory tracking OFF in ${r.source} but is stock-managed in ${managedElsewhere}`,
       detail: { source: r.source, managedElsewhere, tracked: r.tracked },
-      suggestion: `Enable inventory tracking for "${r.sku}" in ${r.source}, otherwise its quantity will never decrement and sync will silently drift.`,
+      suggestion: `Confirm whether "${r.sku}" should be stock-managed in ${r.source}; check external inventory management and backorder policies before enabling tracking.`,
     });
   }
 

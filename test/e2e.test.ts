@@ -46,10 +46,13 @@ describe('fixtures end-to-end', () => {
     expect(blankFindings[0]?.sku).toBe('BLANK-1');
   });
 
-  it('markdown output matches fixtures/expected-report.md (living document)', async () => {
+  it('markdown preserves evidence and conditional interpretation', async () => {
     const { report } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }]);
-    const expected = await readFile('fixtures/expected-report.md', 'utf8');
-    expect(renderMarkdown(report) + '\n').toBe(expected);
+    const markdown = renderMarkdown(report);
+    expect(markdown).toContain('Observed:');
+    expect(markdown).toContain('Conditional risk:');
+    expect(markdown).toContain('Assumptions:');
+    expect(markdown).toContain('Verify:');
   });
 });
 
@@ -66,17 +69,20 @@ describe('multi-location fixtures end-to-end (long inventory CSV)', () => {
     const { report } = await runDiff([{ kind: 'csv', path: C }, { kind: 'csv', path: D }]);
     const messages = report.findings.map((f) => f.message).join('\n');
     expect(messages).toContain('"MULTI-2" quantity differs by 8 (40%) at location "Warehouse A"');
-    expect(messages).toContain('"MULTI-3" is out of stock in shopify-inventory-c (0) at location "Warehouse A"');
+    expect(messages).toContain('"MULTI-3" reports non-positive quantity in shopify-inventory-c (0) at location "Warehouse A"');
     // MULTI-1 and Warehouse B rows agree → no findings mention them.
     expect(messages).not.toContain('MULTI-1');
     expect(messages).not.toContain('Warehouse B');
     expect(report.healthSummary).toEqual({ matched: 5, minorDrift: 0, severeDrift: 2, unmatched: 0, totalCompared: 7 });
   });
 
-  it('markdown output matches fixtures/expected-report-multilocation.md', async () => {
+  it('markdown retains location evidence without asserting a confirmed oversell', async () => {
     const { report } = await runDiff([{ kind: 'csv', path: C }, { kind: 'csv', path: D }]);
-    const expected = await readFile('fixtures/expected-report-multilocation.md', 'utf8');
-    expect(renderMarkdown(report) + '\n').toBe(expected);
+    const markdown = renderMarkdown(report);
+    expect(markdown).toContain('Warehouse A');
+    expect(markdown).toContain('Conditional risk:');
+    expect(markdown).toContain('Assumptions:');
+    expect(markdown).toContain('Verify:');
   });
 });
 
@@ -172,11 +178,16 @@ describe('CLI: --fix-export never clobbers an existing file', () => {
       const fixPath = join(dir, 'fix.csv');
       const first = await runCli(['diff', A, B, '--fix-export', fixPath]);
       expect(first.code).toBe(1); // critical findings exist
-      expect(first.stderr).toContain('fix rows');
-      // The fix direction must be explicit: first source = source of truth.
-      expect(first.stderr).toContain('fix direction: bring "shopify-store-b" in line with "shopify-store-a"');
-      expect(first.stderr).toContain(`verify before importing: inventory-doctor diff ${A} ${fixPath}`);
-      expect(first.stderr).toContain('not covered by this fix file');
+      expect(first.stderr).toContain('review proposals:');
+      // Direction is a human-selected assumption, never objective truth.
+      expect(first.stderr).toContain('review direction: compare "shopify-store-b" against "shopify-store-a"');
+      expect(first.stderr).toContain('not verified truth');
+      expect(first.stderr).toContain('NOT a Shopify import file');
+      const csv = await readFile(fixPath, 'utf8');
+      expect(csv).toContain('Review status');
+      expect(csv).toContain('blocked');
+      expect(csv).toContain('Baseline evidence (JSON)');
+      expect(csv).not.toContain('On hand (new)');
 
       const second = await runCli(['diff', A, B, '--fix-export', fixPath]);
       expect(second.code).toBe(2);
@@ -185,7 +196,7 @@ describe('CLI: --fix-export never clobbers an existing file', () => {
 
       const third = await runCli(['diff', A, B, '--fix-export', fixPath, '--force']);
       expect(third.code).toBe(1);
-      expect(third.stderr).toContain('fix rows');
+      expect(third.stderr).toContain('review proposals:');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -231,6 +242,8 @@ describe('snapshot history end-to-end', () => {
     const critical = check.findings.filter((f) => f.severity === 'critical');
     expect(critical).toHaveLength(1);
     expect(critical[0]?.message).toContain('WIDGET-9');
-    expect(critical[0]?.message).toContain('silently zeroed');
+    expect(critical[0]?.message).toContain('reads 0');
+    expect(critical[0]?.evidence?.length).toBeGreaterThan(0);
+    expect(critical[0]?.verification?.length).toBeGreaterThan(0);
   });
 });

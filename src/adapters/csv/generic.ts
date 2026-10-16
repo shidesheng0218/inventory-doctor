@@ -1,6 +1,6 @@
 import type { InventoryRecord } from '../../core/types.js';
 import type { CanonicalField } from './aliases.js';
-import { blankToNull, parseQuantity, type ParsedCsv } from './parse.js';
+import { blankToNull, parseQuantityCell, type ParsedCsv } from './parse.js';
 
 export interface ColumnMapping {
   sku?: string;
@@ -20,7 +20,12 @@ export function parseGenericCsv(
   mapping: ColumnMapping = {},
 ): InventoryRecord[] {
   const pickHeader = (field: CanonicalField, explicit?: string): string | undefined => {
-    if (explicit && parsed.headers.includes(explicit)) return explicit;
+    if (explicit !== undefined) {
+      if (!parsed.headers.includes(explicit)) {
+        throw new Error(`Invalid CSV in ${source}: mapped ${field} column ${JSON.stringify(explicit)} does not exist`);
+      }
+      return explicit;
+    }
     for (const [header, f] of fields) {
       if (f === field) return header;
     }
@@ -44,16 +49,20 @@ export function parseGenericCsv(
     );
   }
 
+  if (!quantityHeader) {
+    throw new Error(`Invalid CSV in ${source}: no quantity column could be identified. Headers seen: ${parsed.headers.join(', ')}`);
+  }
+
   const knownHeaders = new Set<string>([...fields.keys()]);
   for (const h of [skuHeader, quantityHeader, barcodeHeader, titleHeader, locationHeader]) {
     if (h) knownHeaders.add(h);
   }
 
   const records: InventoryRecord[] = [];
-  for (const row of parsed.rows) {
+  for (const [rowIndex, row] of parsed.rows.entries()) {
     const sku = blankToNull(row[skuHeader]);
     if (sku === null) continue;
-    const { quantity, quantityRaw, isBlank } = parseQuantity(quantityHeader ? row[quantityHeader] : undefined);
+    const { quantity, quantityRaw, isBlank } = parseQuantityCell(parsed, row, quantityHeader, source, rowIndex);
 
     const meta: Record<string, string> = {};
     for (const header of parsed.headers) {

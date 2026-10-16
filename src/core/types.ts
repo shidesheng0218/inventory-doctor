@@ -27,6 +27,10 @@ export interface Finding {
   message: string;
   detail: Record<string, unknown>;
   suggestion: string; // what the merchant should do
+  evidence?: string[]; // observations from the supplied records
+  risk?: string; // conditional consequence, not a confirmed incident
+  assumptions?: string[]; // premises needed to interpret the risk
+  verification?: string[]; // checks before taking corrective action
 }
 
 // Bundle (kit) definition: how many of each component SKU it takes to
@@ -47,6 +51,8 @@ export interface DiagnoseOptions {
   driftPctThreshold: number; // 0..1
   // Bundle kit definitions (usually from inventory-doctor.json top-level "bundles").
   bundles?: BundleDef[]; // empty/undefined → bundle-availability stays silent
+  inventoryRelationship?: 'unknown' | 'shared' | 'independent';
+  allowBackorders?: boolean; // intentional backorders reduce urgency, not the observed facts
   // Rule-level configuration (usually from inventory-doctor.json "rules").
   disabledRules?: string[]; // rule ids to skip entirely
   ignoreSkus?: string[]; // glob patterns ("GIFT-*") matched against the CANONICAL sku
@@ -56,6 +62,8 @@ export interface DiagnoseOptions {
 export const DEFAULT_DIAGNOSE_OPTIONS: DiagnoseOptions = {
   driftAbsThreshold: 5,
   driftPctThreshold: 0.2,
+  inventoryRelationship: 'unknown',
+  allowBackorders: false,
 };
 
 export interface DiagnoseReport {

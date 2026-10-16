@@ -21,7 +21,7 @@ describe('nightly-zero (time-series rule)', () => {
     const findings = nightlyZero(records);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ rule: 'nightly-zero', severity: 'critical', sku: 'WIDGET-1' });
-    expect(findings[0]?.message).toContain('silently zeroed');
+    expect(findings[0]?.message).toContain('reads 0 in the latest');
   });
 
   it('flags a SKU that vanishes from the latest snapshot', () => {
@@ -37,7 +37,7 @@ describe('nightly-zero (time-series rule)', () => {
     const findings = nightlyZero(records);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ severity: 'warning', sku: 'GONE-1' });
-    expect(findings[0]?.message).toContain('missing from the latest');
+    expect(findings[0]?.message).toContain('no numeric quantity in the latest');
   });
 
   it('warns on a sharper-than-sell-through drop that is not zero', () => {

@@ -11,11 +11,32 @@ export interface CsvAdapterResult {
 }
 
 // One entry point: detect the layout, dispatch to the right adapter.
-// detectFormat is given the parsed rows (not just headers) so the wide-format
-// check can confirm a candidate location column actually holds stock counts.
+// Explicit column mappings take precedence over automatic layout detection.
 export function loadCsv(content: string, source: string, mapping: ColumnMapping = {}): CsvAdapterResult {
-  const parsed = parseCsvContent(content);
+  const parsed = parseCsvContent(content, source);
   const detection = detectFormat(parsed);
+  for (const [field, header] of Object.entries(mapping)) {
+    if (header !== undefined && !parsed.headers.includes(header)) {
+      throw new Error(`Invalid CSV in ${source}: mapped ${field} column ${JSON.stringify(header)} does not exist. Headers seen: ${parsed.headers.join(', ')}`);
+    }
+  }
+  // Explicit mappings define a row-based layout and take precedence over
+  // automatic Shopify detection (including its quantity/location choices).
+  if (Object.values(mapping).some((header) => header !== undefined)) {
+    detection.format = 'generic';
+    detection.locationColumns = [];
+    detection.reason = 'explicit column mapping takes precedence over automatic detection';
+  }
+  const quantityField = detection.format === 'shopify-inventory-long'
+    ? ['available', 'onHandCurrent']
+    : ['quantity'];
+  if (detection.format !== 'shopify-inventory-wide' && !mapping.quantity &&
+      ![...detection.fields.values()].some((field) => quantityField.includes(field))) {
+    // Generic emits the detailed missing-SKU message first when neither exists.
+    if ([...detection.fields.values()].includes('sku') || mapping.sku) {
+      throw new Error(`Invalid CSV in ${source}: no quantity column could be identified. Headers seen: ${parsed.headers.join(', ')}`);
+    }
+  }
 
   let records: InventoryRecord[];
   switch (detection.format) {

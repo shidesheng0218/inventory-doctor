@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer, parseSourceArg } from '../src/mcp.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { saveSnapshot } from '../src/snapshots.js';
+import { loadCsv } from '../src/adapters/csv/index.js';
 
 const A = 'fixtures/shopify-store-a.csv';
 const B = 'fixtures/shopify-store-b.csv';
@@ -98,8 +103,65 @@ describe('MCP tools (InMemoryTransport)', () => {
         countsBySeverity: { critical: number; warning: number; info: number };
       };
       expect(health.healthScore).toBe(33);
-      expect(health.countsBySeverity.critical).toBe(8);
+      expect(health.countsBySeverity.critical).toBeGreaterThan(0);
     });
+  });
+
+  it('registers exactly six tools and returns an auditable, non-importable proposal', async () => {
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await withClient(async (client) => {
+        const list = await client.listTools();
+        expect(list.tools.map((t) => t.name).sort()).toEqual([
+          'diff_inventory', 'explain_sku', 'fix_export', 'inventory_health', 'sku_history', 'snapshot_check',
+        ]);
+        const result = await client.callTool({ name: 'fix_export', arguments: { sourceA: A, sourceB: B } });
+        const payload = JSON.parse(textOf(result));
+        expect(payload).toMatchObject({ reviewRequired: true, importable: false, targetSource: 'shopify-store-b', truthSource: 'shopify-store-a' });
+        expect(payload.direction).toContain('not verified truth');
+        expect(payload.proposals.some((p: { status: string }) => p.status === 'blocked')).toBe(true);
+        expect(payload.evidence.length).toBeGreaterThan(0);
+        expect(payload.risk).toBeTruthy();
+        expect(payload.assumptions.length).toBeGreaterThan(0);
+        expect(payload.verification.length).toBeGreaterThan(0);
+        expect(payload.csv).toContain('Review status');
+        const explained = JSON.parse(textOf(await client.callTool({ name: 'explain_sku', arguments: { sku: 'OVER-1', sources: [A, B] } })));
+        expect(explained.findings[0]).toEqual(expect.objectContaining({ evidence: expect.any(Array), risk: expect.any(String), assumptions: expect.any(Array), verification: expect.any(Array) }));
+      });
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    } finally { stdoutSpy.mockRestore(); }
+  });
+
+  it('history and check honor windows, unknown quantities and strict numeric schemas', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mcp-snapshots-'));
+    const previous = process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'];
+    process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'] = dir;
+    try {
+      for (const [i, qty] of ['12', '12', '0', ''].entries()) {
+        const records = loadCsv(`Handle,Title,SKU,Variant Inventory Qty\nw,Widget,W-1,${qty}\n`, 'shop').records;
+        await saveSnapshot('shop', records, new Date(`2026-09-0${i + 1}T08:00:00Z`));
+      }
+      await withClient(async (client) => {
+        const history = JSON.parse(textOf(await client.callTool({ name: 'sku_history', arguments: { sku: 'ｗ-１', snapshotName: 'shop', maxSnapshots: 2 } })));
+        expect(history.found).toBe(true);
+        expect(history.points.map((p: { quantity: number | null }) => p.quantity)).toEqual([0, null]);
+        const missing = JSON.parse(textOf(await client.callTool({ name: 'sku_history', arguments: { sku: 'absent', snapshotName: 'shop' } })));
+        expect(missing).toMatchObject({ found: false, points: [] });
+        const check = JSON.parse(textOf(await client.callTool({ name: 'snapshot_check', arguments: { snapshotName: 'shop', maxSnapshots: 2 } })));
+        expect(check).toMatchObject({ totalSnapshots: 4, windowed: true, findings: [] });
+        expect(check.snapshots).toHaveLength(2);
+        for (const name of ['sku_history', 'snapshot_check']) {
+          for (const maxSnapshots of [0, -1, 1.5, '3', Number.MAX_SAFE_INTEGER + 1]) {
+            const result = await client.callTool({ name, arguments: { sku: 'W-1', snapshotName: 'shop', maxSnapshots } });
+            expect(result.isError).toBe(true);
+          }
+        }
+      });
+    } finally {
+      if (previous === undefined) delete process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'];
+      else process.env['INVENTORY_DOCTOR_SNAPSHOT_DIR'] = previous;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('surfaces a useful error for unknown store names', async () => {

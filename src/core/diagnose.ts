@@ -31,7 +31,7 @@ type RuleFn = (records: InventoryRecord[], options: DiagnoseOptions) => Finding[
 const RULE_FNS: Record<RuleId, RuleFn> = {
   'sku-mismatch': (r) => skuMismatch(r),
   'oversell-risk': (r, o) => oversellRisk(r, o),
-  oversold: (r) => oversold(r),
+  oversold: (r, o) => oversold(r, o),
   'blank-vs-zero': (r) => blankVsZero(r),
   'barcode-crosscheck': (r) => barcodeCrosscheck(r),
   'quantity-drift': (r, o) => quantityDrift(r, o),
@@ -68,6 +68,12 @@ export function diagnose(
   const kept: Finding[] = [];
   for (const f of findings) {
     if (f.sku !== null && ignore.some((re) => re.test(normalizeSku(f.sku as string).canonical))) continue;
+    // Every report finding separates observations from interpretation. Rules with
+    // more specific premises/checks supply their own fields.
+    f.evidence ??= [f.message];
+    f.risk ??= 'If these records are expected to describe the same inventory, discrepancies may affect inventory updates or availability.';
+    f.assumptions ??= ['Product identity, export scope, quantity meaning and capture times must be comparable.'];
+    f.verification ??= ['Check source records and business rules before changing inventory; no source is authoritative solely because of its input order.'];
     const forced = overrides[f.rule];
     kept.push(forced !== undefined && forced !== f.severity ? { ...f, severity: forced } : f);
   }

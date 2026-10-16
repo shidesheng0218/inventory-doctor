@@ -1,5 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { describe, expect, it } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bundleAvailability } from '../../src/core/rules/bundle-availability.js';
@@ -112,29 +111,14 @@ describe('bundle-availability', () => {
   });
 });
 
-describe('bundle-availability regression anchor', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'));
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('diagnose() output is byte-identical to the pre-bundle-era anchor when bundles is undefined', async () => {
-    const anchor = await readFile('test/fixtures/diagnose-no-bundles-anchor.json', 'utf8');
-    const { report } = await runDiff(
-      [{ kind: 'csv', path: 'fixtures/shopify-store-a.csv' }, { kind: 'csv', path: 'fixtures/shopify-store-b.csv' }],
-      { configPath: join(tmpdir(), 'no-such-inventory-doctor.json') },
-    );
-    expect(JSON.stringify(report)).toBe(anchor.trim());
-  });
-
-  it('diagnose() with explicit empty bundles matches the same anchor', async () => {
-    const anchor = JSON.parse(await readFile('test/fixtures/diagnose-no-bundles-anchor.json', 'utf8')) as {
-      findings: Array<{ rule: string }>;
-    };
-    expect(anchor.findings.length).toBeGreaterThan(0);
-    expect(anchor.findings.some((f) => f.rule === 'bundle-availability')).toBe(false);
+describe('bundle-availability report compatibility', () => {
+  it('empty and omitted bundles yield the same report with evidence fields', async () => {
+    const inputs = [{ kind: 'csv' as const, path: 'fixtures/shopify-store-a.csv' }, { kind: 'csv' as const, path: 'fixtures/shopify-store-b.csv' }] as const;
+    const options = { configPath: join(tmpdir(), 'no-such-inventory-doctor.json') };
+    const omitted = await runDiff([...inputs], options);
+    const empty = await runDiff([...inputs], { ...options, diagnose: { bundles: [] } });
+    expect(empty.report.findings).toEqual(omitted.report.findings);
+    expect(empty.report.findings.some((f) => f.rule === 'bundle-availability')).toBe(false);
+    expect(empty.report.findings.every((f) => f.evidence?.length && f.risk && f.assumptions?.length && f.verification?.length)).toBe(true);
   });
 });

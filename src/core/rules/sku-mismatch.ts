@@ -38,7 +38,7 @@ export function skuMismatch(records: InventoryRecord[]): Finding[] {
               quantityRaw: r.quantityRaw,
             })),
           },
-          suggestion: `Deduplicate "${rawSku}"${where} in ${source}: one SKU should map to exactly one quantity per location.`,
+          suggestion: `Deduplicate "${rawSku}"${where} in ${source}: verify whether rows represent distinct variants, batches or quantity dimensions before consolidating them.`,
         });
       }
     }
@@ -69,7 +69,7 @@ export function skuMismatch(records: InventoryRecord[]): Finding[] {
           sku: rawA,
           message: `SKU matches only after removing whitespace/invisible characters: "${visible(rawA)}" (${a}) vs "${visible(rawB)}" (${b})`,
           detail: { sourceA: a, sourceB: b, rawA, rawB, kind: 'whitespace' },
-          suggestion: 'Trim leading/trailing whitespace and remove zero-width characters; make the raw SKU identical in both sources.',
+          suggestion: 'Confirm both records identify the same item and check matching rules before standardizing whitespace.',
         });
       } else {
         findings.push({
@@ -78,7 +78,7 @@ export function skuMismatch(records: InventoryRecord[]): Finding[] {
           sku: rawA,
           message: `SKU differs only by letter case: "${rawA}" (${a}) vs "${rawB}" (${b})`,
           detail: { sourceA: a, sourceB: b, rawA, rawB, kind: 'case' },
-          suggestion: 'Unify SKU casing across sources — many sync tools treat SKUs case-sensitively.',
+          suggestion: 'Check whether the sync tool matches case-sensitively and confirm product identity before standardizing SKU casing.',
         });
       }
     }
@@ -105,11 +105,11 @@ export function skuMismatch(records: InventoryRecord[]): Finding[] {
       const raw = mapA.get(canonical)?.records[0]?.sku ?? canonical;
       findings.push({
         rule: 'sku-mismatch',
-        severity: 'critical',
+        severity: 'warning',
         sku: raw,
-        message: `SKU "${raw}" exists in ${a} but is missing from ${b}`,
+        message: `SKU "${raw}" is present in the supplied ${a} records but absent from the supplied ${b} records`,
         detail: { sourceA: a, sourceB: b, presentIn: a, missingFrom: b, kind: 'orphan' },
-        suggestion: `Add "${raw}" to ${b} or archive it in ${a} — it can never be kept in sync as-is.`,
+        suggestion: 'Check catalog scope, export filters and SKU aliases; add or map the item only if both sources should contain it.',
       });
     }
     for (const canonical of orphansB) {
@@ -117,16 +117,24 @@ export function skuMismatch(records: InventoryRecord[]): Finding[] {
       const raw = mapB.get(canonical)?.records[0]?.sku ?? canonical;
       findings.push({
         rule: 'sku-mismatch',
-        severity: 'critical',
+        severity: 'warning',
         sku: raw,
-        message: `SKU "${raw}" exists in ${b} but is missing from ${a}`,
+        message: `SKU "${raw}" is present in the supplied ${b} records but absent from the supplied ${a} records`,
         detail: { sourceA: a, sourceB: b, presentIn: b, missingFrom: a, kind: 'orphan' },
-        suggestion: `Add "${raw}" to ${a} or archive it in ${b} — it can never be kept in sync as-is.`,
+        suggestion: 'Check catalog scope, export filters and SKU aliases; add or map the item only if both sources should contain it.',
       });
     }
   }
 
-  return findings;
+  return findings.map((f) => ({
+    ...f,
+    evidence: [f.message],
+    risk: f.detail['kind'] === 'orphan'
+      ? 'If both catalogs should contain this item, its absence from the supplied records may prevent matching; intentional assortment or export scope differences can explain it.'
+      : 'If the records identify the same item and the sync tool cannot resolve these identifiers or repeated rows, inventory updates may be missed or applied incorrectly.',
+    assumptions: ['Catalog overlap, product identity and matching behavior have not been verified; string similarity alone does not establish product identity.'],
+    verification: ['Check product/variant identifiers, barcode reuse, catalog scope, export filters and actual sync matching rules before renaming, adding or removing records.'],
+  }));
 }
 
 const MIN_AFFIX_LENGTH = 2;

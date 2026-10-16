@@ -30,6 +30,10 @@ export function renderMarkdown(report: DiagnoseReport): string {
     lines.push('');
     for (const f of findings) {
       lines.push(`- **[${f.rule}]** ${f.message}`);
+      if (f.evidence?.length) lines.push(`  - Observed: ${f.evidence.join('; ')}`);
+      if (f.risk) lines.push(`  - Conditional risk: ${f.risk}`);
+      if (f.assumptions?.length) lines.push(`  - Assumptions: ${f.assumptions.join('; ')}`);
+      if (f.verification?.length) lines.push(`  - Verify: ${f.verification.join('; ')}`);
       lines.push(`  - Suggestion: ${f.suggestion}`);
     }
     lines.push('');

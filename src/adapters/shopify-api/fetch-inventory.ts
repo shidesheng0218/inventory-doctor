@@ -99,25 +99,51 @@ interface LevelsPageResponse {
   } | null;
 }
 
-// Follow a variant's inventoryLevels pagination past the first page of 20.
-// Only called when the main query reports hasNextPage for that variant.
+// Cursor progress is a completeness invariant, not a best-effort hint. Never
+// return a snapshot that silently omitted the rest of a connection.
+function nextCursor<T>(
+  connection: { nodes: T[]; pageInfo: PageInfo } | null | undefined,
+  seen: Set<string>,
+  context: string,
+  isContinuation: boolean,
+): string | null {
+  if (!connection || !Array.isArray(connection.nodes) ||
+      typeof connection.pageInfo?.hasNextPage !== 'boolean') {
+    throw new Error(`Incomplete Shopify snapshot (${context}): missing connection/pageInfo`);
+  }
+  if (connection.nodes.length === 0 && (isContinuation || connection.pageInfo.hasNextPage)) {
+    throw new Error(`Incomplete Shopify snapshot (${context}): empty pagination page`);
+  }
+  if (!connection.pageInfo.hasNextPage) return null;
+  const cursor = connection.pageInfo.endCursor;
+  if (typeof cursor !== 'string' || cursor.trim() === '') {
+    throw new Error(`Incomplete Shopify snapshot (${context}): hasNextPage requires a nonempty cursor`);
+  }
+  if (seen.has(cursor)) {
+    throw new Error(`Incomplete Shopify snapshot (${context}): repeated cursor ${JSON.stringify(cursor)}`);
+  }
+  seen.add(cursor);
+  return cursor;
+}
+
 async function fetchRemainingLevels(
   client: ShopifyClient,
   itemId: string,
-  startCursor: string | null,
+  startCursor: string,
   already: InventoryLevelNode[],
+  source: string,
 ): Promise<InventoryLevelNode[]> {
   const all = [...already];
-  let cursor = startCursor;
+  const seen = new Set([startCursor]);
+  let cursor: string | null = startCursor;
   while (cursor !== null) {
-    const data = await client.graphql<LevelsPageResponse>(INVENTORY_LEVELS_PAGE_QUERY, {
-      itemId,
-      cursor,
-    });
-    const levels = data.inventoryItem?.inventoryLevels;
-    if (!levels) break;
+    const data: LevelsPageResponse = await client.graphql<LevelsPageResponse>(INVENTORY_LEVELS_PAGE_QUERY, { itemId, cursor });
+    if (!data.inventoryItem || data.inventoryItem.id !== itemId) {
+      throw new Error(`Incomplete Shopify snapshot (${source}, inventory item ${itemId}): object disappeared or changed`);
+    }
+    const levels = data.inventoryItem.inventoryLevels;
+    cursor = nextCursor(levels, seen, `${source}, inventory item ${itemId}`, true);
     all.push(...levels.nodes);
-    cursor = levels.pageInfo.hasNextPage ? levels.pageInfo.endCursor : null;
   }
   return all;
 }
@@ -128,10 +154,13 @@ async function fetchRemainingLevels(
 export async function fetchInventory(client: ShopifyClient, source: string): Promise<InventoryRecord[]> {
   const records: InventoryRecord[] = [];
   let cursor: string | null = null;
+  const seen = new Set<string>();
 
   for (;;) {
     const variables: Record<string, unknown> = cursor === null ? {} : { cursor };
     const data = await client.graphql<SnapshotResponse>(INVENTORY_SNAPSHOT_QUERY, variables);
+
+    const followingCursor: string | null = nextCursor(data.productVariants, seen, `${source}, productVariants`, cursor !== null);
 
     for (const variant of data.productVariants.nodes) {
       const sku = variant.sku === null || variant.sku.trim() === '' ? null : variant.sku;
@@ -147,14 +176,15 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
       const meta: Record<string, string> = {};
       if (variant.inventoryPolicy) meta['inventoryPolicy'] = variant.inventoryPolicy.toLowerCase();
 
-      let levels = variant.inventoryItem?.inventoryLevels.nodes ?? [];
-      // A variant with >20 locations is truncated by the main query's
-      // inventoryLevels(first: 20). Page the remainder in rather than silently
-      // dropping locations — multi-location is the core scenario.
-      const levelsPageInfo = variant.inventoryItem?.inventoryLevels.pageInfo;
-      const itemId = variant.inventoryItem?.id;
-      if (levelsPageInfo?.hasNextPage && itemId) {
-        levels = await fetchRemainingLevels(client, itemId, levelsPageInfo.endCursor, levels);
+      let levels: InventoryLevelNode[] = [];
+      if (variant.inventoryItem) {
+        const item = variant.inventoryItem;
+        const levelCursor = nextCursor(item.inventoryLevels, new Set(), `${source}, SKU ${sku} inventoryLevels`, false);
+        levels = item.inventoryLevels.nodes;
+        if (levelCursor !== null) {
+          if (!item.id) throw new Error(`Incomplete Shopify snapshot (${source}, SKU ${sku}): missing inventory item id`);
+          levels = await fetchRemainingLevels(client, item.id, levelCursor, levels, source);
+        }
       }
       if (levels.length === 0) {
         const qty = variant.inventoryQuantity;
@@ -188,9 +218,8 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
       }
     }
 
-    const pageInfo = data.productVariants.pageInfo;
-    if (!pageInfo.hasNextPage || pageInfo.endCursor === null) break;
-    cursor = pageInfo.endCursor;
+    if (followingCursor === null) break;
+    cursor = followingCursor;
   }
 
   return records;

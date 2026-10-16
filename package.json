@@ -63,6 +63,7 @@
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts demo",
     "mcp": "tsx src/mcp.ts",
     "test": "vitest run",
     "build": "tsc && node scripts/add-shebang.mjs",

@@ -131,7 +131,7 @@ export async function runDiff(
 }
 
 // Merge precedence: built-in defaults < inventory-doctor.json "rules" < CLI flags.
-async function resolveDiagnoseOptions(
+export async function resolveDiagnoseOptions(
   options: LoadOptions & { diagnose?: Partial<DiagnoseOptions> },
 ): Promise<DiagnoseOptions> {
   const config = await loadConfigIfExists(options.configPath);
@@ -140,6 +140,8 @@ async function resolveDiagnoseOptions(
     ...DEFAULT_DIAGNOSE_OPTIONS,
     ...(rules?.driftAbsThreshold !== undefined ? { driftAbsThreshold: rules.driftAbsThreshold } : {}),
     ...(rules?.driftPctThreshold !== undefined ? { driftPctThreshold: rules.driftPctThreshold } : {}),
+    ...(rules?.inventoryRelationship !== undefined ? { inventoryRelationship: rules.inventoryRelationship } : {}),
+    ...(rules?.allowBackorders !== undefined ? { allowBackorders: rules.allowBackorders } : {}),
     ...(rules?.disable !== undefined ? { disabledRules: rules.disable } : {}),
     ...(rules?.ignoreSkus !== undefined ? { ignoreSkus: rules.ignoreSkus } : {}),
     ...(rules?.severityOverrides !== undefined ? { severityOverrides: rules.severityOverrides } : {}),
@@ -165,14 +167,14 @@ export interface SkuExplanation {
       tracked: boolean | null;
     }>;
   }>;
-  findings: Array<{ rule: string; severity: string; message: string; suggestion: string }>;
+  findings: Array<Pick<Finding, 'rule' | 'severity' | 'message' | 'suggestion' | 'evidence' | 'risk' | 'assumptions' | 'verification'>>;
 }
 
 // Detail view for one SKU across all sources — what agents ask as a follow-up.
 export async function explainSku(
   sku: string,
   inputs: SourceInput[],
-  options: LoadOptions = {},
+  options: LoadOptions & { diagnose?: Partial<DiagnoseOptions> } = {},
 ): Promise<SkuExplanation> {
   const loaded = await Promise.all(inputs.map((input) => loadSource(input, options)));
   const canonical = normalizeSku(sku).canonical;
@@ -200,7 +202,8 @@ export async function explainSku(
   const report = diagnose(allRecords, await resolveDiagnoseOptions(options));
   const findings = report.findings
     .filter((f) => f.sku !== null && normalizeSku(f.sku).canonical === canonical)
-    .map((f) => ({ rule: f.rule, severity: f.severity, message: f.message, suggestion: f.suggestion }));
+    .map((f) => ({ rule: f.rule, severity: f.severity, message: f.message, suggestion: f.suggestion,
+      evidence: f.evidence ?? [], risk: f.risk ?? '', assumptions: f.assumptions ?? [], verification: f.verification ?? [] }));
 
   return {
     sku,

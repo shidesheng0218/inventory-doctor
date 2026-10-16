@@ -1,7 +1,6 @@
 import type { Finding, InventoryRecord } from '../types.js';
 import {
   aggregateQuantity,
-  distinctSources,
   groupByCanonicalSku,
   hasLocationDimension,
   perLocationQuantities,
@@ -11,14 +10,14 @@ import {
 import { normalizeSku } from '../normalize.js';
 import { DEFAULT_DIAGNOSE_OPTIONS, type DiagnoseOptions } from '../types.js';
 
-// R2 — SKUs you may be overselling right now:
+// R2 — observed quantities/policies with conditional availability risk:
 //   quantity <= 0 in one source but > 0 in another;
 //   "continue selling when out of stock" with quantity <= 0;
 //   cross-source quantity drift beyond the configured threshold.
 //
 // Comparison is location-aligned: when BOTH sources carry a location
 // dimension, quantities are compared per (sku, location) — a location-level
-// oversell must surface and must not be hidden by summing across locations.
+// difference must surface and must not be hidden by summing across locations.
 // When one side has no location dimension, its per-SKU quantity is compared
 // against the other side's cross-location sum.
 export function oversellRisk(
@@ -27,11 +26,10 @@ export function oversellRisk(
 ): Finding[] {
   const findings: Finding[] = [];
   const pairs = sourcePairs(records);
-  const multipleSources = distinctSources(records).length >= 2;
 
   // Continue-selling policy (Shopify "Continue selling when out of stock").
   // This needs no second source — it is true of one store right now — so it is
-  // checked once per (sku, location) instead of only for SKUs present in BOTH
+  // checked once per (source, sku, location) instead of only for SKUs present in BOTH
   // sources (and once per matched pair, which a three-source diff duplicated).
   // Collected separately and appended after the comparisons so the report's
   // ordering within a severity does not shift for existing users.
@@ -41,23 +39,25 @@ export function oversellRisk(
     if (r.meta['inventoryPolicy'] !== 'continue') continue;
     if (r.quantity === null || r.quantity > 0) continue;
     if (r.sku === null) continue;
-    const key = normalizeSku(r.sku).canonical + '\u0000' + (r.location ?? '');
+    const key = r.source + '\u0000' + normalizeSku(r.sku).canonical + '\u0000' + (r.location ?? '');
     if (policySeen.has(key)) continue;
     policySeen.add(key);
 
     policyFindings.push({
       rule: 'oversell-risk',
-      severity: 'warning',
+      severity: options.allowBackorders ? 'info' : 'warning',
       sku: r.sku,
-      message: `"${r.sku}" in ${r.source} allows overselling ("continue selling when out of stock") with quantity ${r.quantity}`,
+      message: `"${r.sku}" in ${r.source} has policy ("continue selling when out of stock") with quantity ${r.quantity}`,
       detail: { source: r.source, location: r.location, quantity: r.quantity, inventoryPolicy: 'continue' },
-      suggestion: multipleSources
-        ? 'Confirm this oversell setting is intentional, and make sure the other source does not also count this stock.'
-        : 'Confirm this oversell setting is intentional: with continue-selling on, orders are accepted for stock you do not have.',
+      suggestion: 'Confirm the continue-selling policy and intended backorder lead times; check whether orders can actually be placed and fulfilled.',
+      evidence: [`${r.source}: quantity ${r.quantity}; inventoryPolicy=continue.`],
+      risk: 'If checkout honors this policy, orders may be accepted despite non-positive reported stock; fulfillment depends on replenishment and backorder arrangements.',
+      assumptions: [`Intentional backorders: ${options.allowBackorders === true}.`],
+      verification: ['Check checkout availability, reservations, replenishment dates and backorder commitments.'],
     });
   }
 
-  for (const [a, b] of pairs) {
+  for (const [a, b] of options.inventoryRelationship === 'independent' ? [] : pairs) {
     const mapA = groupByCanonicalSku(records, a);
     const mapB = groupByCanonicalSku(records, b);
 
@@ -76,7 +76,13 @@ export function oversellRisk(
 
   findings.push(...policyFindings);
 
-  return findings;
+  return findings.map((f) => ({
+    ...f,
+    evidence: f.evidence ?? [f.message],
+    risk: f.risk ?? 'If the sources describe the same stock pool and higher reported stock is offered for sale, availability may be overstated. A discrepancy alone does not prove overselling.',
+    assumptions: f.assumptions ?? [`Inventory relationship: ${options.inventoryRelationship ?? 'unknown'}.`, `Intentional backorders: ${options.allowBackorders === true}.`, 'SKU identity, quantity semantics, locations and capture times are comparable.'],
+    verification: f.verification ?? ['Confirm the stock pool relationship and system of record; check physical stock, reservations, pending orders and snapshot times.'],
+  }));
 }
 
 function compareByLocation(
@@ -116,11 +122,11 @@ function compareAggregate(
     const stocked = qtyA <= 0 ? { source: b, qty: qtyB } : { source: a, qty: qtyA };
     findings.push({
       rule: 'oversell-risk',
-      severity: 'critical',
+      severity: options.inventoryRelationship === 'shared' && !options.allowBackorders ? 'critical' : 'warning',
       sku: rawSku,
-      message: `"${rawSku}" is out of stock in ${empty.source} (${empty.qty})${where} but shows ${stocked.qty} available in ${stocked.source} — you may be selling stock you don't have`,
+      message: `"${rawSku}" reports non-positive quantity in ${empty.source} (${empty.qty})${where} and ${stocked.qty} in ${stocked.source}`,
       detail: { sourceA: a, sourceB: b, quantityA: qtyA, quantityB: qtyB, ...locDetail },
-      suggestion: `Push the real quantity from ${stocked.source} to ${empty.source}, or pause the listing in ${empty.source}.`,
+      suggestion: 'Confirm whether the sources share a stock pool, then verify physical stock, reservations and the authoritative system before reconciling either source.',
     });
     return; // the critical above carries the actionable message; no drift duplicate
   }
@@ -132,11 +138,11 @@ function compareAggregate(
     const severe = diff >= options.driftAbsThreshold * 2 || pct >= options.driftPctThreshold * 2;
     findings.push({
       rule: 'oversell-risk',
-      severity: severe ? 'critical' : 'warning',
+      severity: options.inventoryRelationship === 'shared' && !options.allowBackorders ? (severe ? 'critical' : 'warning') : 'warning',
       sku: rawSku,
       message: `"${rawSku}" quantity differs by ${diff} (${Math.round(pct * 100)}%)${where}: ${qtyA} in ${a} vs ${qtyB} in ${b}`,
       detail: { sourceA: a, sourceB: b, quantityA: qtyA, quantityB: qtyB, diff, pct, ...locDetail },
-      suggestion: 'Reconcile the count in the source of truth and re-sync; investigate recent orders/restocks that only one side recorded.',
+      suggestion: 'Confirm the inventory relationship, capture times and quantity semantics; identify the authoritative system before reconciling counts.',
     });
   }
 }

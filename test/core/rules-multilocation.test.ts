@@ -36,7 +36,7 @@ describe('R2 oversell-risk: location-aligned comparison', () => {
       rec({ source: 'b', sku: 'M-3', location: 'Warehouse A', quantity: 6, quantityRaw: '6' }),
       rec({ source: 'b', sku: 'M-3', location: 'Warehouse B', quantity: 0, quantityRaw: '0' }),
     ]);
-    const oversell = findings.filter((f) => f.message.includes('out of stock'));
+    const oversell = findings.filter((f) => f.message.includes('non-positive quantity'));
     expect(oversell).toHaveLength(2);
     expect(oversell.map((f) => f.detail['location'])).toEqual(['Warehouse A', 'Warehouse B']);
   });
@@ -98,7 +98,7 @@ describe('R1 prefix/suffix heuristic tightening', () => {
     expect(remainingA).toEqual(['a-1']);
   });
 
-  it('end-to-end: A-1 vs A-11 become orphans (critical), not a prefix/suffix info', () => {
+  it('end-to-end: A-1 vs A-11 become unmatched records (warning), not a prefix/suffix info', () => {
     const findings = skuMismatch([rec({ source: 'a', sku: 'A-1' }), rec({ source: 'b', sku: 'A-11' })]);
     expect(findings.filter((f) => f.detail['kind'] === 'prefix-suffix')).toHaveLength(0);
     expect(findings.filter((f) => f.detail['kind'] === 'orphan')).toHaveLength(2);

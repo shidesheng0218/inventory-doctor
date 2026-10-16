@@ -1,87 +1,175 @@
 import Papa from 'papaparse';
 import type { DiagnoseReport, InventoryRecord } from '../core/types.js';
-import { groupByCanonicalSku, hasLocationDimension, perLocationQuantities, aggregateQuantity } from '../core/match.js';
+import { groupByCanonicalSku } from '../core/match.js';
 import { normalizeSku } from '../core/normalize.js';
 
-// Fix export: turn critical findings into a Shopify-importable inventory CSV
-// that brings the SECOND source in line with the FIRST (the source of truth).
-// The tool never writes to any API — the merchant reviews this file and
-// imports it themselves, which keeps the fix auditable.
+// Source order is a human-selected reconciliation assumption, not proof that
+// the first source is correct. This export never represents an import file.
+const BASIS = 'First report source is the human-selected reconciliation baseline, not objective truth; verify quantity semantics and counts before acting.';
 
-export interface FixRow {
+export interface FixEvidence {
+  sku: string | null;
+  location: string | null;
+  quantity: number | null;
+  quantityRaw: string;
+  basis: string;
+}
+
+export interface FixProposal {
   sku: string;
   location: string | null;
-  quantity: number;
+  targetSku: string | null;
+  truthQuantity: number | null;
+  targetQuantity: number | null;
+  proposedAvailable: number | null;
   reason: string;
+  basis: string;
+  status: 'review-required' | 'blocked';
+  blockedReasons: string[];
+  truthEvidence: FixEvidence[];
+  targetEvidence: FixEvidence[];
+}
+
+export interface FixRow extends FixProposal {
+  // Compatibility alias for existing CLI previews; a proposal, never on-hand.
+  quantity: number;
 }
 
 export interface FixExport {
-  targetSource: string; // the source these rows should be imported into
+  targetSource: string;
   rows: FixRow[];
   csv: string;
+  reviewRequired: true;
+  importable: false;
+  truthSource: string;
+  basis: string;
+  // Includes blocked comparisons; rows contains only reviewable suggestions.
+  proposals: FixProposal[];
+}
+
+function locationOf(record: InventoryRecord): string | null {
+  return record.location?.trim() || null;
+}
+
+function evidence(records: InventoryRecord[]): FixEvidence[] {
+  return records.map((r) => ({
+    sku: r.sku,
+    location: r.location,
+    quantity: r.quantity,
+    quantityRaw: r.quantityRaw,
+    basis: r.meta['quantityBasis'] ?? 'unknown',
+  }));
 }
 
 export function buildFixExport(report: DiagnoseReport, records: InventoryRecord[]): FixExport {
-  const truth = report.sources[0];
-  const target = report.sources[1];
-  if (truth === undefined || target === undefined) {
-    return { targetSource: '', rows: [], csv: '' };
-  }
-  const truthBuckets = groupByCanonicalSku(records, truth);
-
-  const rows: FixRow[] = [];
+  const truthSource = report.sources[0] ?? '';
+  const targetSource = report.sources[1] ?? '';
+  const result: FixExport = {
+    targetSource, truthSource, rows: [], csv: '', reviewRequired: true, importable: false,
+    basis: BASIS, proposals: [],
+  };
+  if (!truthSource || !targetSource || truthSource === targetSource) return result;
+  const truthBuckets = groupByCanonicalSku(records, truthSource);
+  const targetBuckets = groupByCanonicalSku(records, targetSource);
   const seen = new Set<string>();
-  const push = (sku: string, location: string | null, quantity: number, reason: string): void => {
-    const key = `${normalizeSku(sku).canonical}${location ?? ''}`;
-    if (seen.has(key)) return; // first (highest-severity) finding wins
+
+  const consider = (sku: string, location: string | null, reason: string): void => {
+    const canonical = normalizeSku(sku).canonical;
+    const key = JSON.stringify([canonical, location]);
+    if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ sku, location, quantity, reason });
+    const allTruth = truthBuckets.get(canonical)?.records ?? [];
+    const allTarget = targetBuckets.get(canonical)?.records ?? [];
+    // An absent location in a finding means a SKU aggregate. Never choose one
+    // warehouse or distribute that aggregate to individual target records.
+    const select = (items: InventoryRecord[]): InventoryRecord[] => location === null
+      ? items : items.filter((r) => locationOf(r) === location);
+    const truth = select(allTruth);
+    const target = select(allTarget);
+    const blockedReasons: string[] = [];
+    if (!canonical) blockedReasons.push('missing-sku');
+    if (truth.length === 0) blockedReasons.push('missing-baseline-match');
+    if (target.length === 0) blockedReasons.push('missing-target-match');
+    if (truth.length > 1) blockedReasons.push('non-unique-baseline-match');
+    if (target.length > 1) blockedReasons.push('non-unique-target-match');
+    const locations = new Set([...truth, ...target].map(locationOf));
+    if (location === null && (locations.size > 1 || [...locations].some((l) => l !== null))) {
+      blockedReasons.push('location-aggregate-or-mismatch');
+    }
+    const truthQuantity = truth.length === 1 ? truth[0]!.quantity : null;
+    const targetQuantity = target.length === 1 ? target[0]!.quantity : null;
+    if (truth.some((r) => r.quantity === null || !Number.isFinite(r.quantity))) blockedReasons.push('unknown-baseline-quantity');
+    if (target.some((r) => r.quantity === null || !Number.isFinite(r.quantity))) blockedReasons.push('unknown-target-quantity');
+    if (truthQuantity !== null && truthQuantity < 0) blockedReasons.push('negative-proposal');
+    const truthEvidence = evidence(truth);
+    const targetEvidence = evidence(target);
+    const bases = new Set([...truthEvidence, ...targetEvidence].map((e) => e.basis));
+    if ([...bases].some((b) => b !== 'unknown' && b !== 'available')) blockedReasons.push('unsupported-quantity-basis');
+    if (bases.size > 1) blockedReasons.push('quantity-basis-mismatch');
+    const proposal: FixProposal = {
+      sku, location, targetSku: target.length === 1 ? target[0]!.sku : null,
+      truthQuantity, targetQuantity,
+      proposedAvailable: blockedReasons.length === 0 ? truthQuantity : null,
+      reason, basis: `${BASIS} Quantity basis: ${[...bases].join(' / ') || 'unknown'}.`,
+      status: blockedReasons.length === 0 ? 'review-required' : 'blocked',
+      blockedReasons, truthEvidence, targetEvidence,
+    };
+    result.proposals.push(proposal);
+    if (proposal.status === 'review-required' && proposal.proposedAvailable !== null) {
+      result.rows.push({ ...proposal, quantity: proposal.proposedAvailable });
+    }
   };
 
   for (const f of report.findings) {
-    if (f.severity !== 'critical' || f.sku === null) continue;
-
-    if (f.rule === 'oversell-risk') {
-      const d = f.detail as { sourceA?: string; sourceB?: string; quantityA?: number; quantityB?: number; location?: string };
-      const location = typeof d.location === 'string' ? d.location : null;
-      // Copy the truth side's quantity over the other side's.
-      if (d.sourceA === truth && typeof d.quantityA === 'number') {
-        push(f.sku, location, d.quantityA, f.rule);
-      } else if (d.sourceB === truth && typeof d.quantityB === 'number') {
-        push(f.sku, location, d.quantityB, f.rule);
-      }
-      continue;
-    }
-
-    if (f.rule === 'blank-vs-zero') {
-      const d = f.detail as { source?: string; location?: string | null };
-      if (d.source !== target) continue; // the blank is on the truth side — nothing safe to write
-      const bucket = truthBuckets.get(normalizeSku(f.sku).canonical);
-      if (!bucket) continue;
-      const location = typeof d.location === 'string' ? d.location : null;
-      let quantity: number | null;
-      if (location !== null && hasLocationDimension(bucket)) {
-        quantity = perLocationQuantities(bucket).get(location)?.quantity ?? null;
-      } else {
-        quantity = aggregateQuantity(bucket);
-      }
-      if (quantity !== null) push(f.sku, location, quantity, f.rule);
-    }
+    if (f.sku === null) continue;
+    const d = f.detail;
+    const pair = (d['sourceA'] === truthSource && d['sourceB'] === targetSource)
+      || (d['sourceB'] === truthSource && d['sourceA'] === targetSource);
+    const source = d['source'] === truthSource || d['source'] === targetSource;
+    const quantityComparison = f.rule === 'oversell-risk' && pair;
+    const blank = f.rule === 'blank-vs-zero' && source;
+    const identity = f.rule === 'sku-mismatch' && ((pair && d['kind'] === 'orphan')
+      || (source && Array.isArray(d['occurrences'])));
+    if (!quantityComparison && !blank && !identity) continue;
+    const location = typeof d['location'] === 'string' ? d['location'].trim() || null : null;
+    consider(f.sku, location, f.rule);
   }
-
-  return { targetSource: target, rows, csv: rows.length === 0 ? '' : toInventoryCsv(rows) };
+  // Missing identifiers cannot participate in canonical matching at all.
+  for (const r of records) {
+    if (r.source !== truthSource && r.source !== targetSource) continue;
+    if (r.sku !== null && normalizeSku(r.sku).canonical !== '') continue;
+    consider(r.sku ?? '', locationOf(r), 'missing-sku');
+  }
+  // Diagnostic severity/order may change without changing the evidence.
+  const compare = (a: FixProposal, b: FixProposal): number =>
+    JSON.stringify([normalizeSku(a.sku).canonical, a.location]).localeCompare(
+      JSON.stringify([normalizeSku(b.sku).canonical, b.location]),
+    );
+  result.proposals.sort(compare);
+  result.rows.sort(compare);
+  if (result.proposals.length > 0) result.csv = toReviewCsv(result);
+  return result;
 }
 
-// Long-format Shopify inventory CSV (SKU + Location + state columns), the same
-// shape Shopify exports and re-imports — and this tool's own adapter reads it
-// back, so a fix file can be re-diffed to confirm it would heal the report.
-function toInventoryCsv(rows: FixRow[]): string {
-  const data = rows.map((r) => ({
-    SKU: r.sku,
-    Location: r.location ?? '',
-    'Available (not editable)': String(r.quantity),
-    'On hand (new)': String(r.quantity),
+function toReviewCsv(result: FixExport): string {
+  const data = result.proposals.map((r) => ({
+    'Review status': r.status,
+    'Review required': 'true',
+    Importable: 'false',
+    'Document type': 'Review proposal only - NOT an importable repair file',
+    'Baseline source (human-selected)': result.truthSource,
+    'Target source': result.targetSource,
+    'Compared SKU': r.sku,
+    'Original target SKU': r.targetSku ?? '',
+    'Compared location': r.location ?? '',
+    'Baseline observed quantity': r.truthQuantity ?? '',
+    'Target observed quantity': r.targetQuantity ?? '',
+    'Proposed available quantity (review only)': r.proposedAvailable ?? '',
     Reason: r.reason,
+    Basis: r.basis,
+    'Blocked reasons': r.blockedReasons.join('; '),
+    'Baseline evidence (JSON)': JSON.stringify(r.truthEvidence),
+    'Target evidence (JSON)': JSON.stringify(r.targetEvidence),
   }));
-  return Papa.unparse(data, { columns: ['SKU', 'Location', 'Available (not editable)', 'On hand (new)', 'Reason'] }) + '\n';
+  return Papa.unparse(data, { newline: '\n' }) + '\n';
 }

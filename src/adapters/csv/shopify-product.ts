@@ -1,6 +1,6 @@
 import type { InventoryRecord } from '../../core/types.js';
 import type { CanonicalField } from './aliases.js';
-import { blankToNull, parseQuantity, type ParsedCsv } from './parse.js';
+import { blankToNull, parseQuantityCell, type ParsedCsv } from './parse.js';
 
 // Shopify product CSV export (both header generations, resolved via aliases).
 // One record per variant row; no location dimension (product exports don't
@@ -14,13 +14,13 @@ export function parseShopifyProductCsv(parsed: ParsedCsv, source: string, fields
   };
 
   const records: InventoryRecord[] = [];
-  for (const row of parsed.rows) {
+  for (const [rowIndex, row] of parsed.rows.entries()) {
     const sku = blankToNull(get(row, 'sku'));
     // Product exports repeat the title on the first row of each handle group;
     // rows without a SKU are option-less placeholders — skip them.
     if (sku === null) continue;
 
-    const { quantity, quantityRaw, isBlank } = parseQuantity(get(row, 'quantity'));
+    const { quantity, quantityRaw, isBlank } = parseQuantityCell(parsed, row, [...fields].find(([, field]) => field === 'quantity')?.[0], source, rowIndex);
     const trackedRaw = get(row, 'tracked');
     const tracked =
       trackedRaw === undefined

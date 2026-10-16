@@ -1,17 +1,8 @@
-import type { Finding, InventoryRecord } from '../types.js';
+import { DEFAULT_DIAGNOSE_OPTIONS, type DiagnoseOptions, type Finding, type InventoryRecord } from '../types.js';
 import { normalizeSku } from '../normalize.js';
 
-// R8 — already oversold: available quantity is negative, which means more
-// units are committed than exist on hand.
-//
-// Every other oversell signal needs a second source to compare against, which
-// is why a single-store deployment had nothing to say on day one. This one is
-// true of one store, right now, and it is the clearest "you are selling stock
-// you do not have" signal there is.
-//
-// Reported per (sku, location) because that is where the correction has to
-// happen; a source with no location dimension reports per SKU.
-export function oversold(records: InventoryRecord[]): Finding[] {
+// R8 — a negative reported quantity is a fact; orders and fulfillment are not inferred.
+export function oversold(records: InventoryRecord[], options: DiagnoseOptions = DEFAULT_DIAGNOSE_OPTIONS): Finding[] {
   const findings: Finding[] = [];
   const seen = new Set<string>();
 
@@ -22,7 +13,7 @@ export function oversold(records: InventoryRecord[]): Finding[] {
     if (canonical === '') continue;
 
     // Duplicate rows for the same shelf are one problem, not two.
-    const key = canonical + '\u0000' + (r.location ?? '');
+    const key = r.source + '\u0000' + canonical + '\u0000' + (r.location ?? '');
     if (seen.has(key)) continue;
     seen.add(key);
 
@@ -30,12 +21,16 @@ export function oversold(records: InventoryRecord[]): Finding[] {
     const where = r.location !== null ? ` at location "${r.location}"` : '';
     findings.push({
       rule: 'oversold',
-      severity: 'critical',
+      severity: options.allowBackorders ? 'info' : 'critical',
       sku: r.sku,
-      message: `"${r.sku}" is oversold by ${short} unit${short === 1 ? '' : 's'}${where} in ${r.source}: available is ${r.quantity}`,
+      message: `"${r.sku}" reports negative quantity ${r.quantity} (${short} below zero)${where} in ${r.source}`,
       detail: { source: r.source, location: r.location, quantity: r.quantity, short },
       suggestion:
-        'Restock, or correct the count: negative availability means orders were accepted for stock that is not there. Check whether "continue selling when out of stock" is on, and whether a recent import or sync lowered the count.',
+        'Check quantity semantics, reservations, backorder policy, orders and physical stock before restocking or correcting the count.',
+      evidence: [`${r.source}${where}: reported quantity ${r.quantity}.`],
+      risk: 'If this quantity represents available stock and backorders are not intended, demand may exceed immediate fulfillment capacity; negative quantity alone does not prove accepted unfulfillable orders.',
+      assumptions: [`Intentional backorders: ${options.allowBackorders === true}.`, 'Quantity meaning and physical stock have not been independently verified.'],
+      verification: ['Check accepted orders, reservations, adjustments, stock counts and backorder policy.'],
     });
   }
 
