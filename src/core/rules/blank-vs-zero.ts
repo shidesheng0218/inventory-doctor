@@ -11,6 +11,9 @@ import { normalizeSku } from '../normalize.js';
 export function blankVsZero(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
   const sources = distinctSources(records);
+  // Group each source once up front; doing it per record is O(records × sources).
+  const groupedBySource =
+    sources.length > 1 ? new Map(sources.map((s) => [s, groupByCanonicalSku(records, s)])) : null;
 
   for (const r of records) {
     if (r.sku === null || normalizeSku(r.sku).canonical === '') continue;
@@ -19,11 +22,10 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
     // Is this SKU managed (with a real quantity) in another source? Then the
     // blank is dangerous: a sync could overwrite that quantity with 0.
     let managedElsewhere: string | null = null;
-    if (sources.length > 1) {
+    if (groupedBySource !== null) {
       for (const other of sources) {
         if (other === r.source) continue;
-        const grouped = groupByCanonicalSku(records, other);
-        const bucket = grouped.get(normalizeSku(r.sku).canonical);
+        const bucket = groupedBySource.get(other)?.get(normalizeSku(r.sku).canonical);
         if (bucket && bucket.records.some((x) => x.quantity !== null)) {
           managedElsewhere = other;
           break;

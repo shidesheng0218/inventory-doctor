@@ -7,6 +7,8 @@ import { normalizeSku } from '../normalize.js';
 export function untracked(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
   const sources = distinctSources(records);
+  // Group each source once up front; doing it per record is O(records × sources).
+  const groupedBySource = new Map(sources.map((s) => [s, groupByCanonicalSku(records, s)]));
 
   for (const r of records) {
     if (r.tracked !== false) continue;
@@ -17,7 +19,7 @@ export function untracked(records: InventoryRecord[]): Finding[] {
     let managedElsewhere: string | null = null;
     for (const other of sources) {
       if (other === r.source) continue;
-      const bucket = groupByCanonicalSku(records, other).get(canonical);
+      const bucket = groupedBySource.get(other)?.get(canonical);
       if (bucket && bucket.records.some((x) => x.tracked === true || x.quantity !== null)) {
         managedElsewhere = other;
         break;
