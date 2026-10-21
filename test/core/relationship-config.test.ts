@@ -24,7 +24,10 @@ describe('inventory relationship configuration', () => {
   });
 
   it('resolveDiagnoseOptions defaults unknown and merges config then explicit options', async () => {
-    const defaultOptions = await resolveDiagnoseOptions({ configPath: join(tmpdir(), 'missing-inventory-doctor.json') });
+    const emptyDir = await mkdtemp(join(tmpdir(), 'invdoc-relationship-'));
+    const emptyConfig = join(emptyDir, 'inventory-doctor.json');
+    await writeFile(emptyConfig, JSON.stringify({ stores: [] }));
+    const defaultOptions = await resolveDiagnoseOptions({ configPath: emptyConfig });
     expect(defaultOptions.inventoryRelationship).toBe('unknown');
     expect(defaultOptions.allowBackorders).toBe(false);
     const dir = await mkdtemp(join(tmpdir(), 'invdoc-relationship-'));
@@ -41,8 +44,10 @@ describe('inventory relationship configuration', () => {
     const b = join(dir, 'b.csv');
     await writeFile(a, 'sku,quantity\nX,0\n');
     await writeFile(b, 'sku,quantity\nX,8\n');
+    const noConfig = join(dir, 'no-config.json');
+    await writeFile(noConfig, JSON.stringify({ stores: [] }));
     const explanation = await explainSku('X', [{ kind: 'csv', path: a }, { kind: 'csv', path: b }], {
-      configPath: join(dir, 'no-config.json'), diagnose: { inventoryRelationship: 'shared' },
+      configPath: noConfig, diagnose: { inventoryRelationship: 'shared' },
     });
     const finding = explanation.findings.find((f) => f.rule === 'oversell-risk');
     expect(finding?.severity).toBe('critical');

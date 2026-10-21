@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findStore, loadConfig, resolveSecret } from '../src/config.js';
+import { findStore, loadConfig, loadConfigIfExists, resolveSecret } from '../src/config.js';
 
 describe('config', () => {
   it('loads stores and validates credential modes', async () => {
@@ -35,6 +35,10 @@ describe('config', () => {
     expect(resolveSecret('env:INV_DOC_TEST_TOKEN')).toBe('shpat_secret');
     expect(resolveSecret('shpat_inline')).toBe('shpat_inline');
     expect(() => resolveSecret('env:INV_DOC_MISSING_VAR')).toThrow(/INV_DOC_MISSING_VAR/);
+  });
+
+  it('throws when an explicit config path does not exist', async () => {
+    await expect(loadConfigIfExists(join(tmpdir(), 'invdoc-definitely-missing-12345.json'))).rejects.toThrow(/not found/);
   });
 });
 
