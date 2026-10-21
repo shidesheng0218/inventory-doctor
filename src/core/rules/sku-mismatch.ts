@@ -1,6 +1,6 @@
 import type { Finding, InventoryRecord } from '../types.js';
 import { normalizeSku } from '../normalize.js';
-import { groupByCanonicalSku, groupBySkuLocation, sourcePairs } from '../match.js';
+import { distinctSources, groupByCanonicalSku, groupBySkuLocation, sourcePairs } from '../match.js';
 
 // R1 — cross-source SKU mapping diagnostics:
 //   case-only mismatch, whitespace/invisible mismatch, prefix/suffix variants,
@@ -13,34 +13,35 @@ import { groupByCanonicalSku, groupBySkuLocation, sourcePairs } from '../match.j
 export function skuMismatch(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
 
-  for (const [a, b] of sourcePairs(records)) {
-    // One-to-many duplicates within each single source, per (sku, location).
-    for (const source of [a, b]) {
-      const grouped = groupBySkuLocation(records, source);
-      for (const bucket of grouped.values()) {
-        if (bucket.records.length < 2) continue;
-        const quantities = new Set(bucket.records.map((r) => r.quantityRaw));
-        if (quantities.size < 2) continue;
-        const rawSku = bucket.records[0]?.sku ?? bucket.canonical;
-        const where = bucket.location !== null ? ` at location "${bucket.location}"` : '';
-        findings.push({
-          rule: 'sku-mismatch',
-          severity: 'critical',
-          sku: rawSku,
-          message: `SKU "${rawSku}" appears ${bucket.records.length} times${where} in ${source} with different quantities`,
-          detail: {
-            source,
-            location: bucket.location,
-            occurrences: bucket.records.map((r) => ({
-              sku: r.sku,
-              location: r.location,
-              quantity: r.quantity,
-              quantityRaw: r.quantityRaw,
-            })),
-          },
-          suggestion: `Deduplicate "${rawSku}"${where} in ${source}: verify whether rows represent distinct variants, batches or quantity dimensions before consolidating them.`,
-        });
-      }
+  // One-to-many duplicates within each single source, per (sku, location).
+  // Checked once per source (not per source pair): a three-source diff must
+  // not report the same duplicate once per pair it appears in, and a
+  // single-source run still deserves the check.
+  for (const source of distinctSources(records)) {
+    const grouped = groupBySkuLocation(records, source);
+    for (const bucket of grouped.values()) {
+      if (bucket.records.length < 2) continue;
+      const quantities = new Set(bucket.records.map((r) => r.quantityRaw));
+      if (quantities.size < 2) continue;
+      const rawSku = bucket.records[0]?.sku ?? bucket.canonical;
+      const where = bucket.location !== null ? ` at location "${bucket.location}"` : '';
+      findings.push({
+        rule: 'sku-mismatch',
+        severity: 'critical',
+        sku: rawSku,
+        message: `SKU "${rawSku}" appears ${bucket.records.length} times${where} in ${source} with different quantities`,
+        detail: {
+          source,
+          location: bucket.location,
+          occurrences: bucket.records.map((r) => ({
+            sku: r.sku,
+            location: r.location,
+            quantity: r.quantity,
+            quantityRaw: r.quantityRaw,
+          })),
+        },
+        suggestion: `Deduplicate "${rawSku}"${where} in ${source}: verify whether rows represent distinct variants, batches or quantity dimensions before consolidating them.`,
+      });
     }
   }
 

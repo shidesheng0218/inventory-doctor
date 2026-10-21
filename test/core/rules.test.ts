@@ -54,6 +54,24 @@ describe('R1 sku-mismatch', () => {
     ]);
     expect(findings.find((f) => f.message.includes('appears 2 times'))).toBeUndefined();
   });
+
+  it('reports one-to-many duplicates exactly once across three sources', () => {
+    const findings = skuMismatch([
+      rec({ source: 'a', sku: 'DUP-1', quantity: 4, quantityRaw: '4' }),
+      rec({ source: 'a', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+      rec({ source: 'b', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+      rec({ source: 'c', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+    ]);
+    expect(findings.filter((f) => f.message.includes('appears 2 times'))).toHaveLength(1);
+  });
+
+  it('reports one-to-many duplicates for a single source', () => {
+    const findings = skuMismatch([
+      rec({ source: 'a', sku: 'DUP-1', quantity: 4, quantityRaw: '4' }),
+      rec({ source: 'a', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+    ]);
+    expect(findings.filter((f) => f.message.includes('appears 2 times'))).toHaveLength(1);
+  });
 });
 
 describe('R2 oversell-risk', () => {
