@@ -90,10 +90,12 @@ export function hasLocationDimension(bucket: SkuBucket): boolean {
 
 // Split a sku-level bucket into per-location quantity buckets. Used when both
 // sources carry a location dimension and comparison must be location-aligned.
-export function perLocationQuantities(bucket: SkuBucket): Map<string, { quantity: number | null; records: InventoryRecord[] }> {
-  const map = new Map<string, { quantity: number | null; records: InventoryRecord[] }>();
+// Records with no location (or a blank one) are keyed by null — never by a
+// sentinel string, which could collide with a real location's name.
+export function perLocationQuantities(bucket: SkuBucket): Map<string | null, { quantity: number | null; records: InventoryRecord[] }> {
+  const map = new Map<string | null, { quantity: number | null; records: InventoryRecord[] }>();
   for (const r of bucket.records) {
-    const location = r.location === null || r.location.trim() === '' ? '(no location)' : r.location.trim();
+    const location = r.location === null || r.location.trim() === '' ? null : r.location.trim();
     const entry = map.get(location) ?? { quantity: null, records: [] };
     entry.records.push(r);
     if (r.quantity !== null) entry.quantity = (entry.quantity ?? 0) + r.quantity;
