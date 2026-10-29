@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bundleAvailability } from '../../src/core/rules/bundle-availability.js';
@@ -114,7 +115,10 @@ describe('bundle-availability', () => {
 describe('bundle-availability report compatibility', () => {
   it('empty and omitted bundles yield the same report with evidence fields', async () => {
     const inputs = [{ kind: 'csv' as const, path: 'fixtures/shopify-store-a.csv' }, { kind: 'csv' as const, path: 'fixtures/shopify-store-b.csv' }] as const;
-    const options = { configPath: join(tmpdir(), 'no-such-inventory-doctor.json') };
+    const dir = await mkdtemp(join(tmpdir(), 'invdoc-bundle-compat-'));
+    const emptyConfig = join(dir, 'inventory-doctor.json');
+    await writeFile(emptyConfig, JSON.stringify({ stores: [] }));
+    const options = { configPath: emptyConfig };
     const omitted = await runDiff([...inputs], options);
     const empty = await runDiff([...inputs], { ...options, diagnose: { bundles: [] } });
     expect(empty.report.findings).toEqual(omitted.report.findings);

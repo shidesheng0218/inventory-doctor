@@ -105,9 +105,15 @@ export async function loadConfig(explicitPath?: string): Promise<AppConfig> {
 // Like loadConfig, but CSV-only runs may legitimately have no config file:
 // returns null instead of throwing when none exists. A file that EXISTS but
 // is invalid still throws — silent misconfiguration is worse than no config.
+// An explicit path that does not exist throws too: a typo'd --config must not
+// silently drop the user's rule/store configuration.
 export async function loadConfigIfExists(explicitPath?: string): Promise<AppConfig | null> {
-  const path = explicitPath ?? DEFAULT_CONFIG_PATHS.find((p) => existsSync(p));
-  if (!path || !existsSync(path)) return null;
+  if (explicitPath !== undefined) {
+    if (!existsSync(explicitPath)) throw new Error(`Config file not found: ${explicitPath}`);
+    return loadConfig(explicitPath);
+  }
+  const path = DEFAULT_CONFIG_PATHS.find((p) => existsSync(p));
+  if (!path) return null;
   return loadConfig(path);
 }
 

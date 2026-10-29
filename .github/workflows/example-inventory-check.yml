@@ -16,5 +16,8 @@ jobs:
         with:
           source-a: fixtures/shopify-store-a.csv
           source-b: fixtures/shopify-store-b.csv
+          # Pin the last published npm version so the scheduled run stays green
+          # between releases; bump after publishing a new version.
+          version: '0.4.0'
           # The repo fixtures intentionally contain critical findings.
           fail-on-critical: false

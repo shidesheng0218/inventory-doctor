@@ -5,6 +5,7 @@ import { explainSku, inventoryHealth, parseSourceArg, runDiff, runSnapshotCheck 
 import { skuHistory } from './history.js';
 import { buildFixExport } from './report/fix-export.js';
 import type { ColumnMapping } from './adapters/csv/generic.js';
+import { VERSION } from './version.js';
 
 export { parseSourceArg };
 
@@ -41,7 +42,7 @@ function mappedColumns(mapping: z.infer<typeof mappingSchema>): ColumnMapping | 
 }
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: 'inventory-doctor', version: '0.4.0' });
+  const server = new McpServer({ name: 'inventory-doctor', version: VERSION });
 
   server.tool(
     'diff_inventory',

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shidesheng0218/inventory-doctor",
+  "title": "Inventory Doctor",
+  "description": "Read-only multi-source e-commerce inventory sync auditor for Shopify, WooCommerce, and CSV exports.",
+  "version": "0.5.0",
+  "repository": {
+    "url": "https://github.com/shidesheng0218/inventory-doctor",
+    "source": "github"
+  },
+  "homepage": "https://github.com/shidesheng0218/inventory-doctor#readme",
+  "license": "MIT",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "inventory-doctor",
+      "version": "0.5.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Start the MCP server on stdio"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SHOPIFY_CLIENT_SECRET",
+          "description": "Optional Shopify app client secret when using env:SHOPIFY_CLIENT_SECRET in inventory-doctor.json",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "INVENTORY_DOCTOR_SNAPSHOT_DIR",
+          "description": "Optional custom directory for saved local inventory snapshots",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

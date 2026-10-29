@@ -50,7 +50,7 @@ export interface BundleDef {
 }
 
 export interface DiagnoseOptions {
-  // quantity-drift / oversell thresholds: flag when |a-b| > max(abs, pct * max(|a|,|b|))
+  // quantity-drift / oversell thresholds: flag when |a-b| > abs OR |a-b| / max(|a|,|b|) > pct — either tripwire fires.
   driftAbsThreshold: number;
   driftPctThreshold: number; // 0..1
   // Bundle kit definitions (usually from inventory-doctor.json top-level "bundles").

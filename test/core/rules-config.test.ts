@@ -104,9 +104,9 @@ describe('rules configuration', () => {
   });
 
   it('CSV-only diff without any config file still works', async () => {
-    const { report } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }], {
-      configPath: join(tmpdir(), 'definitely-does-not-exist-inventory-doctor.json'),
-    });
+    // No configPath at all: absence of config is fine for CSV-only runs.
+    // (A nonexistent EXPLICIT path is different — that throws, see config.test.ts.)
+    const { report } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }]);
     expect(report.findings.length).toBeGreaterThan(0);
   });
 });

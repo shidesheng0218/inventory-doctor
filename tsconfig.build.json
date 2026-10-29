@@ -1,0 +1,6 @@
+{
+  // Build config: excludes src/server/, which is unshipped work in progress.
+  // `npm run typecheck` still checks it through the base tsconfig.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "test", "src/server"]
+}

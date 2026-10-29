@@ -65,6 +65,24 @@ describe('R1 sku-mismatch', () => {
     ]);
     expect(findings.find((f) => f.message.includes('appears 2 times'))).toBeUndefined();
   });
+
+  it('reports one-to-many duplicates exactly once across three sources', () => {
+    const findings = skuMismatch([
+      rec({ source: 'a', sku: 'DUP-1', quantity: 4, quantityRaw: '4' }),
+      rec({ source: 'a', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+      rec({ source: 'b', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+      rec({ source: 'c', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+    ]);
+    expect(findings.filter((f) => f.message.includes('appears 2 times'))).toHaveLength(1);
+  });
+
+  it('reports one-to-many duplicates for a single source', () => {
+    const findings = skuMismatch([
+      rec({ source: 'a', sku: 'DUP-1', quantity: 4, quantityRaw: '4' }),
+      rec({ source: 'a', sku: 'DUP-1', quantity: 9, quantityRaw: '9' }),
+    ]);
+    expect(findings.filter((f) => f.message.includes('appears 2 times'))).toHaveLength(1);
+  });
 });
 
 describe('R2 oversell-risk', () => {
@@ -149,6 +167,16 @@ describe('R3 blank-vs-zero', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.severity).toBe('critical');
   });
+
+  it('names the first source that manages the blank SKU (three sources)', () => {
+    const findings = blankVsZero([
+      rec({ source: 'a', sku: 'B-1', quantity: null, quantityRaw: '' }),
+      rec({ source: 'b', sku: 'B-1', quantity: 3, quantityRaw: '3' }),
+      rec({ source: 'c', sku: 'B-1', quantity: 5, quantityRaw: '5' }),
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.detail['managedElsewhere']).toBe('b');
+  });
 });
 
 describe('R4 barcode-crosscheck', () => {
@@ -213,6 +241,16 @@ describe('R6 untracked', () => {
   it('ignores untracked SKUs nobody else manages', () => {
     const findings = untracked([rec({ source: 'a', sku: 'U-2', tracked: false })]);
     expect(findings).toHaveLength(0);
+  });
+
+  it('names the first managing source (three sources)', () => {
+    const findings = untracked([
+      rec({ source: 'a', sku: 'U-1', tracked: false, quantity: null, quantityRaw: '' }),
+      rec({ source: 'b', sku: 'U-1', quantity: 3, quantityRaw: '3' }),
+      rec({ source: 'c', sku: 'U-1', tracked: true }),
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.detail['managedElsewhere']).toBe('b');
   });
 });
 

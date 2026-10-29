@@ -1,0 +1,21 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      shopifyClientSecret:
+        type: string
+        description: Optional Shopify client secret referenced via env:SHOPIFY_CLIENT_SECRET in inventory-doctor.json
+      snapshotDir:
+        type: string
+        description: Optional directory path for local JSONL inventory snapshots
+  commandFunction: |-
+    (config) => ({
+      command: 'npx',
+      args: ['-y', 'inventory-doctor', 'mcp'],
+      env: {
+        ...(config.shopifyClientSecret ? { SHOPIFY_CLIENT_SECRET: config.shopifyClientSecret } : {}),
+        ...(config.snapshotDir ? { INVENTORY_DOCTOR_SNAPSHOT_DIR: config.snapshotDir } : {})
+      }
+    })
