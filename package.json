@@ -1,6 +1,6 @@
 {
   "name": "inventory-doctor",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Multi-source inventory sync diagnostics — find the SKUs you're overselling without knowing it.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -66,10 +66,13 @@
     "demo": "tsx src/cli.ts demo",
     "mcp": "tsx src/mcp.ts",
     "test": "vitest run",
-    "build": "tsc && node scripts/add-shebang.mjs",
+    "clean": "node scripts/clean.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/add-shebang.mjs",
     "typecheck": "tsc --noEmit",
     "check:stdout": "! grep -rn 'console\\.log' src/",
-    "prepublishOnly": "pnpm run build && pnpm run test"
+    "check:versions": "node scripts/check-versions.mjs",
+    "sync-version": "node scripts/sync-version.mjs",
+    "prepublishOnly": "pnpm run check:versions && pnpm run build && pnpm run test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

@@ -14,6 +14,7 @@ import { renderJson } from './report/json.js';
 import { renderMarkdown } from './report/markdown.js';
 import { renderHtml } from './report/html.js';
 import { buildFixExport } from './report/fix-export.js';
+import { VERSION } from './version.js';
 
 // stdout discipline: all CLI output goes through process.stdout.write, so the
 // MCP stdio transport can never be polluted by a stray print.
@@ -53,7 +54,7 @@ const program = new Command();
 program
   .name('inventory-doctor')
   .description('Multi-source inventory sync diagnostics — find the SKUs you are overselling without knowing it.')
-  .version('0.4.0');
+  .version(VERSION);
 
 program
   .command('demo')
@@ -238,7 +239,8 @@ snapshot
   .argument('<name>', 'snapshot group name')
   .option('--window <n>', 'only load the newest N snapshots (keeps memory flat as history grows)')
   .option('--webhook <url>', 'POST a JSON alert here when critical findings exist (overrides notify.webhookUrl in config)')
-  .action(async (name: string, opts: { window?: string; webhook?: string }) => {
+  .option('--config <path>', 'path to inventory-doctor.json (for notify.webhookUrl)')
+  .action(async (name: string, opts: { window?: string; webhook?: string; config?: string }) => {
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
       const checkOptions = opts.window === undefined ? {} : { maxSnapshots: integerOption(opts.window, '--window') };
@@ -269,7 +271,7 @@ snapshot
         // config failure must never override the critical exit code above.
         // Only criticals alert — warning-only runs stay silent (alert fatigue).
         try {
-          const webhookUrl = opts.webhook ?? (await loadConfigIfExists())?.notify?.webhookUrl;
+          const webhookUrl = opts.webhook ?? (await loadConfigIfExists(opts.config))?.notify?.webhookUrl;
           if (webhookUrl !== undefined) {
             await sendWebhook(webhookUrl, {
               name,

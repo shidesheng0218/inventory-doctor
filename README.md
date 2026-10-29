@@ -129,7 +129,8 @@ inventory-doctor snapshot check shopify-store-a --webhook https://hooks.slack.co
 Only critical findings alert — a warning-only history stays silent, so the
 endpoint doesn't fatigue you into ignoring it. A failed send (network error,
 non-2xx) is a stderr warning and never changes the exit code. Set a default in
-`inventory-doctor.json` and the flag wins per-run:
+`inventory-doctor.json` and the flag wins per-run (pass `--config <path>` when
+the file is not in a default location):
 
 ```json
 { "stores": [ … ], "notify": { "webhookUrl": "https://hooks.slack.com/your-endpoint" } }
@@ -175,7 +176,7 @@ Run a diff in CI with the composite action from this repo (published to the
 marketplace):
 
 ```yaml
-- uses: shidesheng0218/inventory-doctor@v0.3.0
+- uses: shidesheng0218/inventory-doctor@v0.5.0
   with:
     source-a: exports/store-a.csv        # or store:<name> / snapshot:<name>
     source-b: exports/store-b.csv
@@ -374,8 +375,13 @@ stdout is reserved for JSON-RPC; all logging goes to stderr.
 ```bash
 npm test             # vitest — rules, CSV adapters, token cache, throttle logic
 npm run demo -- --format json
-npm run build        # tsc + shebang
+npm run build        # clean + tsc + shebang
 npm run check:stdout # guards the MCP stdout discipline
+npm run check:versions # package/CLI/MCP/manifest/Action versions agree
 ```
+
+`package.json` is the single version source. `npm run sync-version <x.y.z>`
+updates every declaration (CLI, MCP server, `server.json`, Action default,
+README tag) and `check:versions` enforces it in CI.
 
 Architecture: `src/core/` is a pure-function diagnostic kernel (`(records: InventoryRecord[]) => Finding[]`, zero I/O); `src/adapters/` turn CSVs and the Shopify API into that intermediate representation; CLI and MCP layers only parse arguments and format output. Adding a new source (WooCommerce, BigCommerce, …) means adding one adapter, no refactor.
