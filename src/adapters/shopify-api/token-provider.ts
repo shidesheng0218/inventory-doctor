@@ -3,6 +3,7 @@
 // new same-org apps use the client credentials grant; cross-org (agency)
 // setups use the interactive OAuth flow with an offline token on disk.
 // All modes converge behind one TokenProvider interface.
+import { validateShopifyDomain } from './domain.js';
 
 export interface TokenProvider {
   getToken(): Promise<string>;
@@ -57,6 +58,7 @@ export class ClientCredentialsProvider implements TokenProvider {
   private readonly timeoutMs: number;
 
   constructor(private readonly options: ClientCredentialsOptions) {
+    options.domain = validateShopifyDomain(options.domain);
     this.fetchFn = options.fetchFn ?? fetch;
     this.now = options.now ?? Date.now;
     this.timeoutMs = options.timeoutMs ?? 30_000;
@@ -126,18 +128,19 @@ export function tokenProviderFor(store: {
   clientSecret?: string | undefined;
   oauth?: boolean | undefined;
 }): TokenProvider {
+  const domain = validateShopifyDomain(store.domain);
   if (store.accessToken) {
     return new StaticTokenProvider(store.accessToken);
   }
   if (store.clientId && store.clientSecret) {
     return new ClientCredentialsProvider({
-      domain: store.domain,
+      domain,
       clientId: store.clientId,
       clientSecret: store.clientSecret,
     });
   }
   if (store.oauth) {
-    return new OAuthTokenProvider(store.domain);
+    return new OAuthTokenProvider(domain);
   }
   throw new Error(`Store "${store.domain}": provide accessToken, clientId+clientSecret, or "oauth": true.`);
 }

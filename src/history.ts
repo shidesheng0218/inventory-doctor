@@ -19,13 +19,16 @@ export interface SkuHistory {
   canonical: string; // normalized form the matching used
   found: boolean; // false → points is empty (agent-friendly, never throws)
   points: SkuHistoryPoint[]; // expanded per (snapshotId, location)
+  warnings: string[];
 }
 
 export async function skuHistory(sku: string, name: string, options: { maxSnapshots?: number } = {}): Promise<SkuHistory> {
   const canonical = canonicalSku(sku);
   const snapshots = await loadSnapshotWindow(name, options.maxSnapshots);
   const points: SkuHistoryPoint[] = [];
+  const warnings: string[] = [];
   for (const snapshot of snapshots) {
+    warnings.push(...snapshot.warnings);
     for (const record of snapshot.records) {
       if (record.sku === null) continue;
       if (canonicalSku(record.sku) !== canonical) continue;
@@ -37,5 +40,5 @@ export async function skuHistory(sku: string, name: string, options: { maxSnapsh
       });
     }
   }
-  return { sku, canonical, found: points.length > 0, points };
+  return { sku, canonical, found: points.length > 0, points, warnings: [...new Set(warnings)] };
 }

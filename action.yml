@@ -20,7 +20,7 @@ inputs:
     required: false
     default: terminal
   extra-args:
-    description: Additional CLI flags appended verbatim to the diff command
+    description: Diagnostic flags only, as a JSON string array or whitespace-separated flags (for example --drift-abs 3 --map A=B)
     required: false
   fail-on-critical:
     description: Whether critical findings fail the step (CLI exit code 1)
@@ -46,40 +46,29 @@ runs:
     - name: Run inventory-doctor diff
       id: diff
       shell: bash
-      # NOTE: no `env:` block here on purpose — the `secrets` context is not
-      # available inside composite action definitions. Callers pass credential
-      # env vars through their own workflow/job `env:` (see README); those
-      # variables are inherited by this step.
+      env:
+        INPUT_SOURCE_A: ${{ inputs.source-a }}
+        INPUT_SOURCE_B: ${{ inputs.source-b }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
+        INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
       run: |
-        # npx resolves commands against the LOCAL project first. Inside a
-        # checkout of this very repo, npm 10 sees package.json's matching
-        # name+bin and runs a phantom local bin — but dist/ isn't in a fresh
-        # clone ("inventory-doctor: not found"). So: absolutize caller-relative
-        # file paths, then run npx from a neutral directory.
-        abs() { echo "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")"; }
-        SOURCES=()
-        for src in "${{ inputs.source-a }}" "${{ inputs.source-b }}"; do
-          if [ -f "$src" ]; then SOURCES+=("$(abs "$src")"); else SOURCES+=("$src"); fi
-        done
-        CONFIG_ARG=""
-        if [ -n "${{ inputs.config }}" ]; then
-          if [ -f "${{ inputs.config }}" ]; then
-            CONFIG_ARG="--config $(abs "${{ inputs.config }}")"
-          else
-            CONFIG_ARG="--config ${{ inputs.config }}"
-          fi
-        fi
-        STATUS=0
+        set -euo pipefail
+        # Resolve inputs before npx leaves the caller's working directory.
+        ARGS_FILE="$(mktemp)"
+        RUN_DIR=""
+        trap 'rm -f "$ARGS_FILE"; if [ -n "$RUN_DIR" ]; then rm -rf "$RUN_DIR"; fi' EXIT
+        node "$GITHUB_ACTION_PATH/scripts/run-action.mjs" > "$ARGS_FILE"
+        ARGS=()
+        while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < "$ARGS_FILE"
         RUN_DIR="$(mktemp -d)"
         cd "$RUN_DIR"
-        npx -y inventory-doctor@${{ inputs.version }} diff \
-          "${SOURCES[0]}" "${SOURCES[1]}" \
-          --format "${{ inputs.format }}" \
-          ${CONFIG_ARG} \
-          ${{ inputs.extra-args }} \
-          > "$GITHUB_WORKSPACE/inventory-doctor-report.txt" || STATUS=$?
+        STATUS=0
+        npx -y "inventory-doctor@$INPUT_VERSION" "${ARGS[@]}" > "$GITHUB_WORKSPACE/inventory-doctor-report.txt" || STATUS=$?
         echo "report=${GITHUB_WORKSPACE}/inventory-doctor-report.txt" >> "$GITHUB_OUTPUT"
-        if [ "$STATUS" -eq 1 ] && [ "${{ inputs.fail-on-critical }}" != "true" ]; then
+        if [ "$STATUS" -eq 1 ] && [ "$INPUT_FAIL_ON_CRITICAL" = "false" ]; then
           echo "::warning::inventory-doctor found critical findings (fail-on-critical=false)"
           exit 0
         fi

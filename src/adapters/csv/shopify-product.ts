@@ -43,6 +43,7 @@ export function parseShopifyProductCsv(parsed: ParsedCsv, source: string, fields
       title: blankToNull(get(row, 'title')),
       location: null,
       quantity,
+      quantityBasis: 'inventory',
       quantityRaw,
       cellIsBlank: isBlank,
       tracked,

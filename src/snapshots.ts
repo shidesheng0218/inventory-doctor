@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile, unlink, link } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,15 @@ function dirFor(sourceName: string): string {
     throw new Error(`Invalid snapshot source name: ${JSON.stringify(sourceName)}`);
   }
   const safe = sourceName.replace(/[^\w.-]+/g, '_');
-  return join(snapshotRoot(), safe);
+  if (safe === sourceName) return join(snapshotRoot(), safe);
+  // Never adopt a potentially shared legacy directory: two distinct names may
+  // have been sanitized to the same value. Keep it intact and require explicit
+  // file references to inspect that history.
+  const legacy = join(snapshotRoot(), safe);
+  if (existsSync(legacy)) {
+    throw new Error(`Ambiguous legacy snapshot directory ${legacy} for ${JSON.stringify(sourceName)}. History was not moved or deleted; load historical snapshots by their explicit file paths.`);
+  }
+  return join(snapshotRoot(), '.named', createHash('sha256').update(sourceName).digest('hex'));
 }
 
 function isErrno(error: unknown, code: string): boolean {
@@ -59,17 +68,29 @@ export async function saveSnapshot(sourceName: string, records: InventoryRecord[
     return { ...row, meta: { ...row.meta, snapshotVersion: '1', snapshotSource: row.meta['snapshotSource'] ?? row.source } };
   });
   await mkdir(dir, { recursive: true });
-  // Never overwrite an existing snapshot: two saves landing in the same second
-  // would otherwise silently destroy history. Suffixed ids keep both.
-  let id = idFromDate(now);
-  let path = join(dir, `${id}.jsonl`);
-  for (let n = 2; existsSync(path); n += 1) {
-    id = `${idFromDate(now)}-${n}`;
-    path = join(dir, `${id}.jsonl`);
+  // Publish through an exclusive hard-link. This makes each candidate name
+  // immutable even when multiple writers race on the same timestamp.
+  const baseId = idFromDate(now);
+  for (let n = 1; ; n += 1) {
+    const id = n === 1 ? baseId : `${baseId}-${n}`;
+    const path = join(dir, `${id}.jsonl`);
+    const sequence = n;
+    const body = normalized.map((r) => JSON.stringify({
+      ...r,
+      meta: { ...r.meta, snapshotId: id, snapshotSequence: String(sequence) },
+    })).join('\n') + '\n';
+    const temp = join(dir, `.snapshot-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temp, body, { encoding: 'utf8', flag: 'wx' });
+      await link(temp, path);
+      await unlink(temp);
+      return { id, path, savedAt: now.toISOString(), recordCount: normalized.length };
+    } catch (error) {
+      try { await unlink(temp); } catch (cleanup) { if (!isErrno(cleanup, 'ENOENT')) throw cleanup; }
+      if (isErrno(error, 'EEXIST')) continue;
+      throw error;
+    }
   }
-  const body = normalized.map((r) => JSON.stringify(r)).join('\n') + '\n';
-  await writeFile(path, body, 'utf8');
-  return { id, path, savedAt: now.toISOString(), recordCount: records.length };
 }
 
 export async function listSnapshotStubs(sourceName: string): Promise<SnapshotStub[]> {
@@ -236,7 +257,7 @@ async function readSnapshot(name: string, id: string, path: string): Promise<Loa
     const record = normalizeRecord(parsed, `${path} (line ${i + 1})`, name, warnings);
     // Re-tag so reports show which snapshot a row came from, and so
     // time-aware rules (nightly-zero) can order snapshots chronologically.
-    record.meta = { ...record.meta, snapshotAt: savedAt, snapshotSource: record.meta['snapshotSource'] ?? record.source, snapshotVersion: record.meta['snapshotVersion'] ?? '0' };
+    record.meta = { ...record.meta, snapshotAt: savedAt, snapshotId: id, snapshotSequence: String(parseSnapshotId(id)?.sequence ?? 1), snapshotSource: record.meta['snapshotSource'] ?? record.source, snapshotVersion: record.meta['snapshotVersion'] ?? '0' };
     record.source = `${name}@${id}`;
     records.push(record);
   }
@@ -268,6 +289,8 @@ function normalizeRecord(value: unknown, context: string, fallbackSource: string
   if (quantity !== null && (typeof quantity !== 'number' || !Number.isSafeInteger(quantity))) {
     return invalid('quantity (expected a safe integer or null)');
   }
+  const quantityBasis = value['quantityBasis'] ?? 'unknown';
+  if (!['available', 'on_hand', 'inventory', 'unknown'].includes(quantityBasis as string)) return invalid('quantityBasis');
   const source = value['source'] === undefined ? fallbackSource : nullableString('source');
   if (source === null || !source.trim()) return invalid('source');
   const quantityRaw = value['quantityRaw'] === undefined
@@ -293,7 +316,7 @@ function normalizeRecord(value: unknown, context: string, fallbackSource: string
   return {
     source, sku: nullableString('sku'), barcode: nullableString('barcode'),
     title: nullableString('title'), location: nullableString('location'),
-    quantity, quantityRaw, cellIsBlank, tracked: nullableBoolean('tracked'), meta,
+    quantity, quantityBasis: quantityBasis as NonNullable<InventoryRecord['quantityBasis']>, quantityRaw, cellIsBlank, tracked: nullableBoolean('tracked'), meta,
   };
 }
 

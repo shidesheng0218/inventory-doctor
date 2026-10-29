@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { RULES } from './core/diagnose.js';
 import { normalizeSku } from './core/normalize.js';
-import type { BundleDef, DiagnoseOptions, Severity } from './core/types.js';
+import { validateDiagnoseOptions, type BundleDef, type DiagnoseOptions, type Severity } from './core/types.js';
 
 // Store config. Credentials may be written inline or referenced as
 // "env:VAR_NAME" so secrets never have to live in the file.
@@ -79,6 +79,13 @@ export async function loadConfig(explicitPath?: string): Promise<AppConfig> {
         `Invalid WooCommerce entry in ${path}: each entry needs "name", "baseUrl", "consumerKey", and "consumerSecret".`,
       );
     }
+  }
+  const sourceNames = new Set<string>();
+  for (const store of [...parsed.stores, ...(parsed.woocommerce ?? [])]) {
+    if (sourceNames.has(store.name)) {
+      throw new Error(`Invalid config at ${path}: Duplicate source name ${JSON.stringify(store.name)}.`);
+    }
+    sourceNames.add(store.name);
   }
   if (parsed.rules !== undefined) {
     validateRules(parsed.rules, path);
@@ -158,11 +165,10 @@ function validateRules(rules: RulesConfig, path: string): void {
       throw new Error(`Invalid config at ${path}: severity for "${id}" must be one of ${SEVERITIES.join(', ')}.`);
     }
   }
-  for (const [key, value] of [['driftAbsThreshold', rules.driftAbsThreshold], ['driftPctThreshold', rules.driftPctThreshold]] as const) {
-    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
-      throw new Error(`Invalid config at ${path}: rules.${key} must be a non-negative number.`);
-    }
-  }
+  validateDiagnoseOptions({
+    ...(rules.driftAbsThreshold !== undefined ? { driftAbsThreshold: rules.driftAbsThreshold } : {}),
+    ...(rules.driftPctThreshold !== undefined ? { driftPctThreshold: rules.driftPctThreshold } : {}),
+  });
 }
 
 function validateStore(store: StoreConfig, path: string): void {

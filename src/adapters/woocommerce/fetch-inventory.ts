@@ -37,6 +37,7 @@ function toRecord(source: string, title: string, fields: WooStockFields): Invent
     title: title.trim() === '' ? null : title,
     location: null,
     quantity,
+    quantityBasis: quantity === null ? 'unknown' : 'inventory',
     quantityRaw: quantity === null ? '' : String(quantity),
     // Live API read: no "blank cell" concept — a null quantity here means
     // manage_stock=false (untracked), so blank-vs-zero must not fire.

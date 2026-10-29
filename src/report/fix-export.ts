@@ -51,13 +51,18 @@ function locationOf(record: InventoryRecord): string | null {
   return record.location?.trim() || null;
 }
 
+function quantityBasisOf(record: InventoryRecord): string {
+  const basis = record.quantityBasis;
+  return basis === 'available' || basis === 'on_hand' || basis === 'inventory' || basis === 'unknown' ? basis : 'unknown';
+}
+
 function evidence(records: InventoryRecord[]): FixEvidence[] {
   return records.map((r) => ({
     sku: r.sku,
     location: r.location,
     quantity: r.quantity,
     quantityRaw: r.quantityRaw,
-    basis: r.meta['quantityBasis'] ?? 'unknown',
+    basis: quantityBasisOf(r),
   }));
 }
 
@@ -104,7 +109,7 @@ export function buildFixExport(report: DiagnoseReport, records: InventoryRecord[
     const truthEvidence = evidence(truth);
     const targetEvidence = evidence(target);
     const bases = new Set([...truthEvidence, ...targetEvidence].map((e) => e.basis));
-    if ([...bases].some((b) => b !== 'unknown' && b !== 'available')) blockedReasons.push('unsupported-quantity-basis');
+    if ([...bases].some((b) => b !== 'available')) blockedReasons.push('unsupported-quantity-basis');
     if (bases.size > 1) blockedReasons.push('quantity-basis-mismatch');
     const proposal: FixProposal = {
       sku, location, targetSku: target.length === 1 ? target[0]!.sku : null,
@@ -171,5 +176,5 @@ function toReviewCsv(result: FixExport): string {
     'Baseline evidence (JSON)': JSON.stringify(r.truthEvidence),
     'Target evidence (JSON)': JSON.stringify(r.targetEvidence),
   }));
-  return Papa.unparse(data, { newline: '\n' }) + '\n';
+  return Papa.unparse(data, { newline: '\n', escapeFormulae: true }) + '\n';
 }

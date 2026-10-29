@@ -82,6 +82,12 @@ quantity evidence, quantity basis, review status, and blocked reasons. The first
 source is a **human-selected baseline, never verified truth**. Nothing is applied
 to inventory; even an unblocked proposal requires human verification.
 
+Quantity proposals require both records to explicitly identify their quantity basis as
+`available`. Product CSV inventory counts, inferred wide-layout warehouse columns,
+WooCommerce managed stock and legacy records do not establish that basis and are
+blocked. Explicit `Available` columns and Shopify API available quantities retain
+that evidence; on-hand quantities are never relabeled as available.
+
 ```bash
 inventory-doctor diff a.csv b.csv --fix-export review.csv
 # stderr: review direction, baseline assumption, review-required/blocked counts
@@ -95,6 +101,10 @@ The printed direction names the resolved baseline and target. Ambiguous matches,
 missing SKUs, unknown quantities, location aggregates/mismatches and unsupported
 quantity bases may block a proposal. Consult each proposal's blocked reasons;
 there is no promise that every finding can produce a quantity suggestion.
+
+Source names must be unique across a comparison and across configured stores.
+For two CSV files with the same basename, rename one file or use distinct `name`
+values through the library API before comparing.
 
 Do not diff the proposal CSV as if it were a verified inventory snapshot, or
 import it as a repair. Check original records, reservations, orders, transfers,
@@ -175,7 +185,7 @@ Run a diff in CI with the composite action from this repo (published to the
 marketplace):
 
 ```yaml
-- uses: shidesheng0218/inventory-doctor@v0.3.0
+- uses: shidesheng0218/inventory-doctor@v0.4.0
   with:
     source-a: exports/store-a.csv        # or store:<name> / snapshot:<name>
     source-b: exports/store-b.csv

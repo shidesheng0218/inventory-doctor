@@ -1,10 +1,11 @@
 import { createServer, type Server } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { validateShopifyDomain } from './domain.js';
 
 // Shopify OAuth (authorization code grant) for the agency scenario: the app
 // and store are NOT in the same org, so client credentials are rejected with
@@ -25,6 +26,7 @@ export function buildAuthorizeUrl(options: {
   state: string;
   scopes: string[];
 }): string {
+  const domain = validateShopifyDomain(options.domain);
   const params = new URLSearchParams({
     client_id: options.clientId,
     scope: options.scopes.join(','),
@@ -33,7 +35,7 @@ export function buildAuthorizeUrl(options: {
     // No grant_options: the authorization code grant issues an OFFLINE token
     // by default — no expiry, no refresh flow to maintain.
   });
-  return `https://${options.domain}/admin/oauth/authorize?${params.toString()}`;
+  return `https://${domain}/admin/oauth/authorize?${params.toString()}`;
 }
 
 export async function exchangeCodeForToken(
@@ -43,6 +45,7 @@ export async function exchangeCodeForToken(
   code: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<{ token: string; scope: string }> {
+  domain = validateShopifyDomain(domain);
   const res = await fetchFn(`https://${domain}/admin/oauth/access_token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -70,6 +73,7 @@ export function oauthTokenFilePath(): string {
 }
 
 export async function saveOAuthToken(domain: string, token: string, scope: string): Promise<string> {
+  domain = validateShopifyDomain(domain);
   const path = oauthTokenFilePath();
   const file = await readTokenFile(path);
   file.tokens[domain] = { token, scope, savedAt: new Date().toISOString() };
@@ -79,13 +83,30 @@ export async function saveOAuthToken(domain: string, token: string, scope: strin
 }
 
 export async function readOAuthToken(domain: string): Promise<string | null> {
+  domain = validateShopifyDomain(domain);
   const file = await readTokenFile(oauthTokenFilePath());
   return file.tokens[domain]?.token ?? null;
 }
 
 async function readTokenFile(path: string): Promise<TokenFile> {
   if (!existsSync(path)) return { tokens: {} };
-  return JSON.parse(await readFile(path, 'utf8')) as TokenFile;
+  await chmod(path, 0o600);
+  const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('tokens' in parsed)) {
+    throw new Error(`Invalid OAuth token file ${path}: expected an object with a tokens map.`);
+  }
+  const tokens = (parsed as { tokens?: unknown }).tokens;
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) {
+    throw new Error(`Invalid OAuth token file ${path}: expected tokens to be an object.`);
+  }
+  for (const [domain, value] of Object.entries(tokens)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid OAuth token file ${path}: malformed token entry for ${domain}.`);
+    const entry = value as Record<string, unknown>;
+    if (typeof entry.token !== 'string' || !entry.token.trim() || typeof entry.scope !== 'string' || typeof entry.savedAt !== 'string') {
+      throw new Error(`Invalid OAuth token file ${path}: malformed token entry for ${domain}.`);
+    }
+  }
+  return parsed as TokenFile;
 }
 
 // --- interactive flow ------------------------------------------------------
@@ -119,6 +140,7 @@ export interface OAuthFlowResult {
 }
 
 export async function runOAuthFlow(options: OAuthFlowOptions): Promise<OAuthFlowResult> {
+  options = { ...options, domain: validateShopifyDomain(options.domain) };
   const state = randomBytes(16).toString('hex');
   const presentUrl = options.presentUrl ?? defaultPresentUrl;
   const timeoutMs = options.timeoutMs ?? 5 * 60_000;
@@ -176,19 +198,32 @@ function waitForCallback(
     server.listen(0, '127.0.0.1', () => {
       const address = server?.address();
       if (address === null || typeof address === 'string') {
+        clearTimeout(timer);
+        server?.close();
         reject(new Error('Could not start the loopback OAuth callback server.'));
         return;
       }
       const redirectUri = `http://127.0.0.1:${address.port}/callback`;
-      presentUrl(
-        buildAuthorizeUrl({
-          domain: options.domain,
-          clientId: options.clientId,
-          redirectUri,
-          state,
-          scopes: options.scopes ?? DEFAULT_SCOPES,
-        }),
-      );
+      try {
+        presentUrl(
+          buildAuthorizeUrl({
+            domain: options.domain,
+            clientId: options.clientId,
+            redirectUri,
+            state,
+            scopes: options.scopes ?? DEFAULT_SCOPES,
+          }),
+        );
+      } catch (err) {
+        clearTimeout(timer);
+        server?.close();
+        reject(err);
+      }
+    });
+    server.on('error', (err) => {
+      clearTimeout(timer);
+      server?.close();
+      reject(new Error(`Could not start the loopback OAuth callback server: ${err.message}`));
     });
   });
 }

@@ -17,15 +17,38 @@ function review(records: InventoryRecord[]) {
 }
 
 describe('review proposal export', () => {
+  it('blocks unknown and incompatible quantity bases', () => {
+    for (const basis of ['unknown', 'inventory', 'on_hand'] as const) {
+      const fix = review([rec('a', 100, { quantityBasis: 'available' }), rec('b', 92, { quantityBasis: basis })]);
+      expect(fix.rows).toEqual([]);
+      expect(fix.proposals[0]?.blockedReasons).toContain('unsupported-quantity-basis');
+    }
+  });
+
+  it('allows matching explicit available basis only', () => {
+    const fix = review([rec('a', 100, { quantityBasis: 'available' }), rec('b', 92, { quantityBasis: 'available' })]);
+    expect(fix.rows[0]).toMatchObject({ proposedAvailable: 100, status: 'review-required' });
+  });
+
+  it('uses the real adapters quantity basis and blocks product inventory quantity proposals', async () => {
+    const { report, sources } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }]);
+    expect(sources[0]?.records[0]?.quantityBasis).toBe('inventory');
+    const fix = buildFixExport(report, sources.flatMap((s) => s.records));
+    expect(fix.rows).toEqual([]);
+    expect(fix.proposals.some((p) => p.blockedReasons.includes('unsupported-quantity-basis'))).toBe(true);
+  });
+
   it('keeps CLI aliases but exports explicitly non-importable proposals and blocked evidence', async () => {
     const { report, sources } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }]);
     const fix = buildFixExport(report, sources.flatMap((s) => s.records));
     expect(fix).toMatchObject({ targetSource: 'shopify-store-b', truthSource: 'shopify-store-a', reviewRequired: true, importable: false });
-    expect(fix.rows.find((r) => r.sku === 'OVER-1')).toMatchObject({ quantity: 0, proposedAvailable: 0, reason: 'oversell-risk' });
-    expect(fix.rows.find((r) => r.sku === 'DRIFT-1')).toMatchObject({ quantity: 100, targetQuantity: 92 });
+    expect(fix.rows).toEqual([]);
+    expect(fix.proposals.find((r) => r.sku === 'OVER-1')).toMatchObject({ proposedAvailable: null, status: 'blocked' });
+    expect(fix.proposals.find((r) => r.sku === 'DRIFT-1')?.blockedReasons).toContain('unsupported-quantity-basis');
     expect(fix.rows.some((r) => r.sku === 'BLANK-1' || r.sku === 'DUP-100')).toBe(false);
     expect(fix.proposals.find((r) => r.sku === 'BLANK-1')).toMatchObject({ status: 'blocked', proposedAvailable: null });
     expect(fix.basis).toContain('not objective truth');
+    expect(fix.csv).toContain('Blocked reasons');
     const parsed = Papa.parse<Record<string, string>>(fix.csv, { header: true, skipEmptyLines: true });
     expect(parsed.errors).toEqual([]);
     expect(parsed.meta.fields).toContain('Proposed available quantity (review only)');
@@ -40,20 +63,43 @@ describe('review proposal export', () => {
     expect(buildFixExport(report, sources.flatMap((s) => s.records)).csv).toBe(await readFile('fixtures/expected-fix.csv', 'utf8'));
   });
 
+  it.each(['=', '+', '-', '@', '\t', '\r'])('escapes formula prefix %j in exported cells while preserving evidence', (prefix) => {
+    const sku = `${prefix}SKU-1`;
+    const baseline = `${prefix}baseline`;
+    const target = `${prefix}target`;
+    const records = [rec(baseline, 100, { sku, location: `${prefix}Main`, quantityBasis: 'available' }),
+      rec(target, 92, { sku, location: `${prefix}Main`, quantityBasis: 'available' })];
+    const fix = review(records);
+    expect(fix.rows).toHaveLength(1);
+    expect(fix.rows[0]?.targetSku).toBe(sku);
+    const parsed = Papa.parse<Record<string, string>>(fix.csv, { header: true, skipEmptyLines: true });
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.data[0]).toMatchObject({
+      'Baseline source (human-selected)': `'${baseline}`,
+      'Target source': `'${target}`,
+      'Original target SKU': `'${sku}`,
+    });
+    if (prefix !== '\t' && prefix !== '\r') {
+      expect(parsed.data[0]?.['Compared SKU']).toBe(`'${sku.toUpperCase()}`);
+      expect(parsed.data[0]?.['Compared location']).toBe(`'${prefix}Main`);
+    }
+    expect(JSON.parse(parsed.data[0]!['Target evidence (JSON)']!)[0]).toMatchObject({ sku, location: `${prefix}Main` });
+  });
+
   it('uses real diagnose default unknown-basis warning findings without a severity gate', () => {
-    const records = [rec('a', 100), rec('b', 92)];
+    const records = [rec('a', 100, { quantityBasis: 'available' }), rec('b', 92, { quantityBasis: 'available' })];
     const report = diagnose(records);
     expect(report.findings.find((f) => f.rule === 'oversell-risk')?.severity).toBe('warning');
     const fix = buildFixExport(report, records);
     expect(fix.rows[0]).toMatchObject({ quantity: 100, truthQuantity: 100, targetQuantity: 92, status: 'review-required' });
-    expect(fix.rows[0]?.basis).toContain('unknown');
+    expect(fix.rows[0]?.basis).toContain('available');
     expect(fix.importable).toBe(false);
     report.findings = report.findings.map((f) => ({ ...f, severity: 'info' }));
     expect(buildFixExport(report, records).rows[0]?.quantity).toBe(100);
   });
 
   it('follows report source order in either direction and preserves raw target SKU', () => {
-    const records = [rec('a', 0), rec('b', 8, { sku: ' sku-1 ' })];
+    const records = [rec('a', 0, { quantityBasis: 'available' }), rec('b', 8, { sku: ' sku-1 ', quantityBasis: 'available' })];
     const report = diagnose(records);
     expect(buildFixExport(report, records).rows[0]).toMatchObject({ quantity: 0, targetSku: ' sku-1 ' });
     report.sources = ['b', 'a'];
@@ -72,8 +118,8 @@ describe('review proposal export', () => {
   });
 
   it('allows independent unique location matches without summing warehouses', () => {
-    const records = [rec('a', 0, { location: ' East ' }), rec('a', 100, { location: 'West' }),
-      rec('b', 8, { location: 'East' }), rec('b', 92, { location: 'West' })];
+    const records = [rec('a', 0, { location: ' East ', quantityBasis: 'available' }), rec('a', 100, { location: 'West', quantityBasis: 'available' }),
+      rec('b', 8, { location: 'East', quantityBasis: 'available' }), rec('b', 92, { location: 'West', quantityBasis: 'available' })];
     const fix = review(records);
     expect(fix.rows.map((r) => [r.location, r.quantity])).toEqual([['East', 0], ['West', 100]]);
   });
@@ -94,8 +140,8 @@ describe('review proposal export', () => {
   });
 
   it('does not merge distinct SKU/location keys by concatenation', () => {
-    const records = [rec('a', 0, { sku: 'AB', location: 'C' }), rec('a', 0, { sku: 'A', location: 'BC' }),
-      rec('b', 8, { sku: 'AB', location: 'C' }), rec('b', 8, { sku: 'A', location: 'BC' })];
+    const records = [rec('a', 0, { sku: 'AB', location: 'C', quantityBasis: 'available' }), rec('a', 0, { sku: 'A', location: 'BC', quantityBasis: 'available' }),
+      rec('b', 8, { sku: 'AB', location: 'C', quantityBasis: 'available' }), rec('b', 8, { sku: 'A', location: 'BC', quantityBasis: 'available' })];
     expect(review(records).rows).toHaveLength(2);
   });
 

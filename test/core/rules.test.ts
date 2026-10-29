@@ -7,6 +7,7 @@ import { computeHealthSummary, healthScore, quantityDrift } from '../../src/core
 import { untracked } from '../../src/core/rules/untracked.js';
 import { DEFAULT_DIAGNOSE_OPTIONS } from '../../src/core/types.js';
 import { rec } from '../helpers.js';
+import { indexBySourceSku, groupByCanonicalSku } from '../../src/core/match.js';
 
 describe('R1 sku-mismatch', () => {
   it('flags case-only mismatch as warning', () => {
@@ -44,6 +45,16 @@ describe('R1 sku-mismatch', () => {
     ]);
     const dup = findings.find((f) => f.message.includes('appears 2 times'));
     expect(dup?.severity).toBe('critical');
+  });
+
+  it('reports a source-local duplicate once even with three sources', () => {
+    const findings = skuMismatch([
+      rec({ source: 'a', sku: 'DUP-3', quantity: 1, quantityRaw: '1' }),
+      rec({ source: 'a', sku: 'DUP-3', quantity: 2, quantityRaw: '2' }),
+      rec({ source: 'b', sku: 'DUP-3', quantity: 2, quantityRaw: '2' }),
+      rec({ source: 'c', sku: 'DUP-3', quantity: 2, quantityRaw: '2' }),
+    ]);
+    expect(findings.filter((f) => f.message.includes('appears 2 times'))).toHaveLength(1);
   });
 
   it('does not flag duplicates with identical quantities', () => {
@@ -185,7 +196,7 @@ describe('R5 quantity-drift', () => {
     const findings = quantityDrift(records);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.severity).toBe('info');
-    expect(findings[0]?.message).toContain('Sync health score');
+    expect(findings[0]?.message).toContain('source-pair comparison units');
   });
 });
 
@@ -202,5 +213,37 @@ describe('R6 untracked', () => {
   it('ignores untracked SKUs nobody else manages', () => {
     const findings = untracked([rec({ source: 'a', sku: 'U-2', tracked: false })]);
     expect(findings).toHaveLength(0);
+  });
+});
+
+describe('source/SKU index regressions', () => {
+  it('preserves source order, empty sources, normalization and bucket records', () => {
+    const records = [
+      rec({ source: 'empty', sku: null }),
+      rec({ source: 'a', sku: ' ＡＢＣ ', location: 'L1' }),
+      rec({ source: 'a', sku: 'abc', location: 'L2' }),
+      rec({ source: 'b', sku: '\u200b' }),
+    ];
+    const index = indexBySourceSku(records);
+    expect([...index.keys()]).toEqual(['empty', 'a', 'b']);
+    for (const source of index.keys()) expect(index.get(source)).toEqual(groupByCanonicalSku(records, source));
+    expect(index.get('a')?.get('abc')?.records).toEqual(records.slice(1, 3));
+  });
+
+  it('finds management in the first eligible other source with normalized keys', () => {
+    const records = [
+      rec({ source: 'a', sku: ' ＡＢＣ ', quantity: null, tracked: false }),
+      rec({ source: 'b', sku: 'abc', quantity: null, tracked: false, cellIsBlank: null }),
+      rec({ source: 'c', sku: 'ABC', quantity: 0, tracked: true }),
+      rec({ source: 'd', sku: 'abc', quantity: 8, tracked: true }),
+    ];
+    expect(untracked(records).map((f) => f.detail['managedElsewhere'])).toEqual(['c', 'c']);
+    expect(blankVsZero(records).map((f) => f.detail['managedElsewhere'])).toEqual(['c']);
+  });
+
+  it('keeps health summary fields and counts each source pair separately', () => {
+    const records = ['a', 'b', 'c'].map((source) => rec({ source, sku: 'X', quantity: 5 }));
+    expect(computeHealthSummary(records)).toEqual({ matched: 3, minorDrift: 0, severeDrift: 0, unmatched: 0, totalCompared: 3 });
+    expect(quantityDrift(records)[0]?.message).toContain('each source pair counted separately');
   });
 });

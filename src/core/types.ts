@@ -8,6 +8,7 @@ export interface InventoryRecord {
   title: string | null;
   location: string | null; // null = source has no location dimension
   quantity: number | null; // null !== 0; this distinction is a core capability
+  quantityBasis?: QuantityBasis; // missing legacy values are treated as unknown
   quantityRaw: string; // raw cell content, used to tell blank from "0"
   // Whether the source genuinely had a BLANK cell for this quantity. CSV
   // parsers set true/false; API adapters set null because "blank cell" does
@@ -17,6 +18,9 @@ export interface InventoryRecord {
   tracked: boolean | null; // whether Shopify's inventory tracker is on
   meta: Record<string, string>; // other columns, kept for extensibility
 }
+
+// inventory is a platform-managed count whose available-stock semantics are unconfirmed.
+export type QuantityBasis = 'available' | 'on_hand' | 'inventory' | 'unknown';
 
 export type Severity = 'critical' | 'warning' | 'info';
 
@@ -65,6 +69,17 @@ export const DEFAULT_DIAGNOSE_OPTIONS: DiagnoseOptions = {
   inventoryRelationship: 'unknown',
   allowBackorders: false,
 };
+
+export function validateDiagnoseOptions(options: Partial<DiagnoseOptions>): void {
+  if (options.driftAbsThreshold !== undefined &&
+      (!Number.isFinite(options.driftAbsThreshold) || options.driftAbsThreshold < 0)) {
+    throw new RangeError('driftAbsThreshold must be a finite non-negative number');
+  }
+  if (options.driftPctThreshold !== undefined &&
+      (!Number.isFinite(options.driftPctThreshold) || options.driftPctThreshold < 0 || options.driftPctThreshold > 1)) {
+    throw new RangeError('driftPctThreshold must be a finite number between 0 and 1');
+  }
+}
 
 export interface DiagnoseReport {
   generatedAt: string; // ISO timestamp

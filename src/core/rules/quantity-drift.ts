@@ -1,7 +1,7 @@
 import type { Finding, HealthSummary, InventoryRecord } from '../types.js';
 import {
   aggregateQuantity,
-  groupByCanonicalSku,
+  indexBySourceSku,
   hasLocationDimension,
   perLocationQuantities,
   sourcePairs,
@@ -26,7 +26,7 @@ export function quantityDrift(
       rule: 'quantity-drift',
       severity: 'info',
       sku: null,
-      message: `Sync health score: ${score}/100 — ${summary.matched} exact, ${summary.minorDrift} minor drift, ${summary.severeDrift} severe drift, ${summary.unmatched} unmatched of ${summary.totalCompared} SKUs compared`,
+      message: `Sync health score: ${score}/100 — ${summary.matched} exact, ${summary.minorDrift} minor drift, ${summary.severeDrift} severe drift, ${summary.unmatched} unmatched of ${summary.totalCompared} source-pair comparison units (SKUs, or SKU/location pairs when both sources provide locations; each source pair counted separately)`,
       detail: { ...summary, healthScore: score },
       suggestion:
         summary.severeDrift > 0 || summary.unmatched > 0
@@ -42,9 +42,10 @@ export function computeHealthSummary(
 ): HealthSummary {
   const summary: HealthSummary = { matched: 0, minorDrift: 0, severeDrift: 0, unmatched: 0, totalCompared: 0 };
 
+  const index = indexBySourceSku(records);
   for (const [a, b] of sourcePairs(records)) {
-    const mapA = groupByCanonicalSku(records, a);
-    const mapB = groupByCanonicalSku(records, b);
+    const mapA = index.get(a)!;
+    const mapB = index.get(b)!;
     const seen = new Set<string>();
 
     for (const [canonical, bucketA] of mapA) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, stat, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   saveOAuthToken,
 } from '../../src/adapters/shopify-api/oauth.js';
 import { OAuthTokenProvider, tokenProviderFor } from '../../src/adapters/shopify-api/token-provider.js';
+import { validateShopifyDomain } from '../../src/adapters/shopify-api/domain.js';
 
 let dir: string;
 
@@ -24,6 +25,11 @@ afterEach(async () => {
 });
 
 describe('buildAuthorizeUrl', () => {
+  it.each(['evil.example', 'a.myshopify.com/path', 'a.myshopify.com:443', 'user@a.myshopify.com'])('rejects unsafe Shopify domain %s', (domain) => {
+    expect(() => validateShopifyDomain(domain)).toThrow(/myshopify.com host/);
+    expect(() => buildAuthorizeUrl({ domain, clientId: 'cid', redirectUri: 'http://127.0.0.1:1/callback', state: 'x', scopes: [] })).toThrow();
+  });
+
   it('hits the shop domain with read-only scopes and state', () => {
     const url = buildAuthorizeUrl({
       domain: 'client.myshopify.com',
@@ -47,6 +53,21 @@ describe('token file', () => {
     expect(await readOAuthToken('a.myshopify.com')).toBe('shp-token');
     expect(await readOAuthToken('other.myshopify.com')).toBeNull();
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('tightens permissions on an existing token file', async () => {
+    const path = await saveOAuthToken('a.myshopify.com', 'tok', 'read_inventory');
+    await chmod(path, 0o644);
+    await readOAuthToken('a.myshopify.com');
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    await chmod(path, 0o644);
+    await saveOAuthToken('a.myshopify.com', 'tok2', 'read_inventory');
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  it('rejects malformed token files', async () => {
+    await writeFile(process.env['INVENTORY_DOCTOR_OAUTH_TOKEN_FILE']!, JSON.stringify({ tokens: { 'a.myshopify.com': { token: 1 } } }));
+    await expect(readOAuthToken('a.myshopify.com')).rejects.toThrow(/malformed token entry/);
   });
 
   it('OAuthTokenProvider reads the saved token and errors with guidance otherwise', async () => {
@@ -96,6 +117,13 @@ describe('runOAuthFlow (loopback integration)', () => {
     const result = await flow;
     expect(result.token).toBe('offline-tok');
     expect(await readOAuthToken('client.myshopify.com')).toBe('offline-tok');
+  });
+
+  it('closes the loopback server and rejects if URL presentation fails', async () => {
+    await expect(runOAuthFlow({
+      domain: 'client.myshopify.com', clientId: 'cid', clientSecret: 'secret',
+      presentUrl: () => { throw new Error('display failed'); },
+    })).rejects.toThrow(/display failed/);
   });
 
   it('rejects on state mismatch (CSRF guard)', async () => {

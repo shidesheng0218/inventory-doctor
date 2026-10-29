@@ -45,6 +45,14 @@ describe('snapshot storage', () => {
     expect(loaded.records[0]?.quantity).toBe(5);
   });
 
+  it('lists snapshot stubs without reading snapshot contents', async () => {
+    const saved = await saveSnapshot('stubs', [rec({ source: 'stubs', sku: 'X', quantity: 3 })], new Date('2026-09-01T08:00:00Z'));
+    const readFileSpy = vi.spyOn(fs, 'readFile');
+    const stubs = await listSnapshotStubs('stubs');
+    expect(stubs).toEqual([{ id: saved.id, path: saved.path, savedAt: saved.savedAt.slice(0, 19) }]);
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
   it('resolves name@id-prefix and defaults to the latest snapshot', async () => {
     await saveSnapshot('s', [rec({ source: 's', sku: 'X', quantity: 1 })], new Date('2026-09-01T08:00:00Z'));
     await saveSnapshot('s', [rec({ source: 's', sku: 'X', quantity: 2 })], new Date('2026-09-02T08:00:00Z'));

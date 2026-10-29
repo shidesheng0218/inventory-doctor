@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../../src/config.js';
-import { explainSku, resolveDiagnoseOptions, runDiff } from '../../src/run.js';
+import { explainSku, inventoryHealth, resolveDiagnoseOptions, runDiff } from '../../src/run.js';
 
 describe('inventory relationship configuration', () => {
   it('validates and loads rules fields', async () => {
@@ -50,6 +50,21 @@ describe('inventory relationship configuration', () => {
     expect(finding?.risk).toBeTruthy();
     expect(finding?.assumptions).toContain('Inventory relationship: shared.');
     expect(finding?.verification?.length).toBeGreaterThan(0);
+  });
+
+  it.each(['explainSku', 'inventoryHealth'] as const)('%s rejects duplicate loaded source names', async (entrypoint) => {
+    const dir = await mkdtemp(join(tmpdir(), 'invdoc-source-names-'));
+    try {
+      const first = join(dir, 'first.csv');
+      const second = join(dir, 'second.csv');
+      await writeFile(first, 'sku,quantity\nX,1\n');
+      await writeFile(second, 'sku,quantity\nX,2\n');
+      const inputs = [{ kind: 'csv' as const, path: first, name: 'same' }, { kind: 'csv' as const, path: second, name: 'same' }];
+      const result = entrypoint === 'explainSku' ? explainSku('X', inputs) : inventoryHealth(inputs);
+      await expect(result).rejects.toThrow(/Duplicate source name "same"/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('config applies and explicit diagnose options win', async () => {

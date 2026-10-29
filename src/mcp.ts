@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { explainSku, inventoryHealth, parseSourceArg, runDiff, runSnapshotCheck } from './run.js';
 import { skuHistory } from './history.js';
 import { buildFixExport } from './report/fix-export.js';
+import type { ColumnMapping } from './adapters/csv/generic.js';
 
 export { parseSourceArg };
 
@@ -15,6 +16,29 @@ export { parseSourceArg };
 // config file + env-referenced credentials), or "snapshot:<name>[@<id>]".
 // Parsing lives in run.ts so the CLI and MCP share one definition.
 const SOURCE_DESC = 'CSV file path, "store:<name>" for a configured Shopify store, "woo:<name>" for a configured WooCommerce store, or "snapshot:<name>[@<id>]" for a saved snapshot';
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 1000;
+const PAGE_DESC = 'Non-negative zero-based offset into the result page.';
+const pageSize = (value: number | undefined): number => value ?? DEFAULT_PAGE_SIZE;
+const page = <T>(items: T[], offset: number, maxItems: number) => {
+  const sliced = items.slice(offset, offset + maxItems);
+  const truncated = offset + sliced.length < items.length;
+  return { items: sliced, total: items.length, truncated, ...(truncated ? { nextOffset: offset + sliced.length } : {}) };
+};
+const mappingSchema = z.object({ sku: z.string().optional(), quantity: z.string().optional(), barcode: z.string().optional(), title: z.string().optional(), location: z.string().optional() }).strict().optional().describe('Explicit CSV header mapping for unrecognized layouts');
+const diagnoseSchema = {
+  driftAbs: z.number().finite().nonnegative().optional().describe('Absolute drift threshold override'),
+  driftPct: z.number().finite().nonnegative().optional().describe('Percentage drift threshold override'),
+};
+const diagnoseArgs = (driftAbs: number | undefined, driftPct: number | undefined) => ({ ...(driftAbs === undefined ? {} : { driftAbsThreshold: driftAbs }), ...(driftPct === undefined ? {} : { driftPctThreshold: driftPct }) });
+function mappedColumns(mapping: z.infer<typeof mappingSchema>): ColumnMapping | undefined {
+  if (mapping === undefined) return undefined;
+  const result: ColumnMapping = {};
+  for (const key of ['sku', 'quantity', 'barcode', 'title', 'location'] as const) {
+    if (mapping[key] !== undefined) result[key] = mapping[key];
+  }
+  return result;
+}
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({ name: 'inventory-doctor', version: '0.4.0' });
@@ -26,28 +50,16 @@ export function createMcpServer(): McpServer {
       sourceA: z.string().describe(SOURCE_DESC),
       sourceB: z.string().describe(SOURCE_DESC),
       configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
-      maxFindings: z
-        .number()
-        .int()
-        .min(1)
-        .max(1000)
-        .optional()
-        .describe('Cap on findings returned (default 100). On truncation the response carries totalFindings + a next-step hint.'),
+      columnMapping: mappingSchema,
+      ...diagnoseSchema,
+      maxFindings: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap on findings returned (default 100)'),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe(PAGE_DESC),
     },
-    async ({ sourceA, sourceB, configPath, maxFindings }) => {
-      const { report } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath });
-      const cap = maxFindings ?? 100;
-      if (report.findings.length <= cap) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }] };
-      }
-      const payload = {
-        ...report,
-        findings: report.findings.slice(0, cap),
-        totalFindings: report.findings.length,
-        findingsTruncated: true,
-        nextStep:
-          'Findings were truncated to maxFindings. They are sorted by severity, so the most important ones are included. Use explain_sku(sku, sources) for per-SKU detail on anything omitted.',
-      };
+    async ({ sourceA, sourceB, configPath, columnMapping, driftAbs, driftPct, maxFindings, offset = 0 }) => {
+      const { report } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath, columnMapping: mappedColumns(columnMapping), diagnose: diagnoseArgs(driftAbs, driftPct) });
+      const result = page(report.findings, offset, pageSize(maxFindings));
+      if (!result.truncated && offset === 0) return { content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }] };
+      const payload = { ...report, findings: result.items, totalFindings: result.total, findingsTruncated: result.truncated || offset > 0, ...(result.nextOffset === undefined ? {} : { nextOffset: result.nextOffset }), nextStep: 'Use offset with maxFindings to continue, or explain_sku for per-SKU detail. Keep snapshot:name@id fixed across follow-ups.' };
       return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
     },
   );
@@ -59,10 +71,21 @@ export function createMcpServer(): McpServer {
       sku: z.string().describe('The SKU to explain'),
       sources: z.array(z.string()).min(1).describe(`Sources to search — each is a ${SOURCE_DESC}`),
       configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
+      columnMapping: mappingSchema,
+      ...diagnoseSchema,
+      maxRecords: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap records returned per source (default 100)'),
+      maxFindings: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap findings returned (default 100)'),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe(PAGE_DESC),
     },
-    async ({ sku, sources, configPath }) => {
-      const explanation = await explainSku(sku, sources.map(parseSourceArg), { configPath });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(explanation, null, 2) }] };
+    async ({ sku, sources, configPath, columnMapping, driftAbs, driftPct, maxRecords, maxFindings, offset = 0 }) => {
+      const explanation = await explainSku(sku, sources.map(parseSourceArg), { configPath, columnMapping: mappedColumns(columnMapping), diagnose: diagnoseArgs(driftAbs, driftPct) });
+      const recordsCap = pageSize(maxRecords);
+      const findingsPage = page(explanation.findings, offset, pageSize(maxFindings));
+      const perSource = explanation.perSource.map((source) => {
+        const records = page(source.records, offset, recordsCap);
+        return { ...source, records: records.items, totalRecords: records.total, recordsTruncated: records.truncated, ...(records.nextOffset === undefined ? {} : { nextRecordsOffset: records.nextOffset }) };
+      });
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...explanation, perSource, findings: findingsPage.items, totalFindings: findingsPage.total, findingsTruncated: findingsPage.truncated, ...(findingsPage.nextOffset === undefined ? {} : { nextFindingsOffset: findingsPage.nextOffset }) }, null, 2) }] };
     },
   );
 
@@ -72,10 +95,15 @@ export function createMcpServer(): McpServer {
     {
       sources: z.array(z.string()).min(1).describe(`Sources — each is a ${SOURCE_DESC}`),
       configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
+      columnMapping: mappingSchema,
+      ...diagnoseSchema,
+      maxWarnings: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap warnings returned (default 100)'),
     },
-    async ({ sources, configPath }) => {
-      const health = await inventoryHealth(sources.map(parseSourceArg), { configPath });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(health, null, 2) }] };
+    async ({ sources, configPath, columnMapping, driftAbs, driftPct, maxWarnings }) => {
+      const health = await inventoryHealth(sources.map(parseSourceArg), { configPath, columnMapping: mappedColumns(columnMapping), diagnose: diagnoseArgs(driftAbs, driftPct) });
+      const warnings = [...new Set((health as { warnings?: string[] }).warnings ?? [])];
+      const warningPage = page(warnings, 0, pageSize(maxWarnings));
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...health, ...(warnings.length > 0 ? { warnings: warningPage.items, totalWarnings: warningPage.total, warningsTruncated: warningPage.truncated, ...(warningPage.nextOffset === undefined ? {} : { nextWarningsOffset: warningPage.nextOffset }) } : {}) }, null, 2) }] };
     },
   );
 
@@ -86,10 +114,15 @@ export function createMcpServer(): McpServer {
       sku: z.string().describe('The SKU to trace (matched canonically: case/width-insensitive)'),
       snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
       maxSnapshots: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('Only load the newest N snapshots (default: all)'),
+      maxItems: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap snapshot points returned (default 100)'),
+      maxWarnings: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap warnings returned (default 100)'),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe(PAGE_DESC),
     },
-    async ({ sku, snapshotName, maxSnapshots }) => {
+    async ({ sku, snapshotName, maxSnapshots, maxItems, maxWarnings, offset = 0 }) => {
       const history = await skuHistory(sku, snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(history, null, 2) }] };
+      const points = page(history.points, offset, pageSize(maxItems));
+      const warnings = page([...new Set(history.warnings)], 0, pageSize(maxWarnings));
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...history, points: points.items, totalPoints: points.total, pointsTruncated: points.truncated, ...(points.nextOffset === undefined ? {} : { nextOffset: points.nextOffset }), warnings: warnings.items, totalWarnings: warnings.total, warningsTruncated: warnings.truncated, note: 'Keep the same snapshot:name@id reference for fixed follow-up questions.' }, null, 2) }] };
     },
   );
 
@@ -99,30 +132,51 @@ export function createMcpServer(): McpServer {
     {
       snapshotName: z.string().describe('Snapshot group name (the name used with snapshot save)'),
       maxSnapshots: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional().describe('Only load the newest N snapshots (default: all)'),
+      maxItems: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap snapshots returned (default 100)'),
+      maxFindings: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap findings returned (default 100)'),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe(PAGE_DESC),
     },
-    async ({ snapshotName, maxSnapshots }) => {
+    async ({ snapshotName, maxSnapshots, maxItems, maxFindings, offset = 0 }) => {
       const result = await runSnapshotCheck(snapshotName, maxSnapshots === undefined ? {} : { maxSnapshots });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      const snapshots = page(result.snapshots, offset, pageSize(maxItems));
+      const findings = page(result.findings, offset, pageSize(maxFindings));
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...result, snapshots: snapshots.items, findings: findings.items, snapshotsTruncated: snapshots.truncated, totalFindings: findings.total, findingsTruncated: findings.truncated, ...(snapshots.nextOffset === undefined ? {} : { nextSnapshotsOffset: snapshots.nextOffset }), ...(findings.nextOffset === undefined ? {} : { nextFindingsOffset: findings.nextOffset }), note: 'Keep the same snapshot:name@id reference for fixed follow-up questions.' }, null, 2) }] };
     },
   );
 
   server.tool(
     'fix_export',
-    'Build an audit review proposal for sourceB using sourceA as a human-selected baseline, not verified truth. Returns non-importable review CSV, proposals including blocked reasons, raw evidence and verification steps. No file or inventory is written; never import the CSV as a repair file.',
+    'Build an audit review proposal for sourceB using sourceA as a human-selected baseline, not verified truth. Returns non-importable review CSV, proposals including blocked reasons, raw evidence and verification steps. Proposals, rows and evidence use the same bounded page; CSV is omitted on partial pages. No file or inventory is written; never import the CSV as a repair file. Keep snapshot:name@id references fixed across follow-up questions.',
     {
       sourceA: z.string().describe(`${SOURCE_DESC} — human-selected comparison baseline, not verified truth`),
       sourceB: z.string().describe(`${SOURCE_DESC} — target considered for review, never automatically changed`),
       configPath: z.string().optional().describe('Path to inventory-doctor.json (optional; config can also tune diagnostic rules)'),
+      columnMapping: mappingSchema,
+      ...diagnoseSchema,
+      maxItems: z.number().int().min(1).max(MAX_PAGE_SIZE).optional().describe('Cap proposals, rows and evidence to one aligned page (default 100)'),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe(PAGE_DESC),
     },
-    async ({ sourceA, sourceB, configPath }) => {
-      const { report, sources } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath });
+    async ({ sourceA, sourceB, configPath, columnMapping, driftAbs, driftPct, maxItems, offset = 0 }) => {
+      const { report, sources } = await runDiff([parseSourceArg(sourceA), parseSourceArg(sourceB)], { configPath, columnMapping: mappedColumns(columnMapping), diagnose: diagnoseArgs(driftAbs, driftPct) });
       const records = sources.flatMap((s) => s.records);
       const fix = buildFixExport(report, records);
+      const proposalsPage = page(fix.proposals, offset, pageSize(maxItems));
+      const proposalKeys = new Set(proposalsPage.items.map((p) => JSON.stringify([p.sku, p.location])));
+      const rows = fix.rows.filter((row) => proposalKeys.has(JSON.stringify([row.sku, row.location])));
+      const partial = proposalsPage.truncated || offset > 0;
+      const { csv, ...metadata } = fix;
       const payload = {
-        ...fix,
+        ...metadata,
+        proposals: proposalsPage.items,
+        rows,
+        ...(partial ? { csvOmitted: true, csvOmittedReason: 'CSV omitted because this is a partial proposal page; it would include proposals outside this response.' } : { csv }),
         direction: `review "${fix.targetSource}" (sourceB) against "${fix.truthSource}" (sourceA, human-selected baseline; not verified truth)`,
-        fixRows: fix.rows.length,
-        evidence: fix.proposals.map((p) => ({ sku: p.sku, location: p.location, baseline: p.truthEvidence, target: p.targetEvidence })),
+        fixRows: rows.length,
+        totalRows: fix.rows.length,
+        totalItems: proposalsPage.total,
+        itemsTruncated: partial,
+        ...(proposalsPage.nextOffset === undefined ? {} : { nextOffset: proposalsPage.nextOffset }),
+        evidence: proposalsPage.items.map((p) => ({ sku: p.sku, location: p.location, baseline: p.truthEvidence, target: p.targetEvidence })),
         risk: 'A quantity difference does not establish physical stock, an accepted oversell, or which source is correct. Applying an unverified proposal can corrupt inventory.',
         assumptions: [fix.basis],
         verification: [

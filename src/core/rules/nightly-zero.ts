@@ -13,12 +13,23 @@ import { normalizeSku } from '../normalize.js';
 export function nightlyZero(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
 
-  const timestamps = [
-    ...new Set(records.map((r) => r.meta['snapshotAt']).filter((t): t is string => t !== undefined)),
-  ].sort();
-  if (timestamps.length < 3) return findings;
-  const latest = timestamps[timestamps.length - 1] as string;
-  const earlier = timestamps.slice(0, -1);
+  const snapshotMetadata = new Map<string, { at: string; sequence: number }>();
+  for (const record of records) {
+    const key = record.meta['snapshotId'] ?? record.meta['snapshotAt'];
+    if (key === undefined || snapshotMetadata.has(key)) continue;
+    snapshotMetadata.set(key, {
+      at: record.meta['snapshotAt'] ?? key,
+      sequence: Number(record.meta['snapshotSequence'] ?? 1),
+    });
+  }
+  const snapshotKeys = [...snapshotMetadata.keys()].sort((a, b) => {
+    const am = snapshotMetadata.get(a)!;
+    const bm = snapshotMetadata.get(b)!;
+    return am.at.localeCompare(bm.at) || am.sequence - bm.sequence || a.localeCompare(b);
+  });
+  if (snapshotKeys.length < 3) return findings;
+  const latest = snapshotKeys[snapshotKeys.length - 1] as string;
+  const earlier = snapshotKeys.slice(0, -1);
 
   interface SeriesPoint {
     quantity: number | null; // null = SKU absent or every cell blank in that snapshot
@@ -27,7 +38,7 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
   const series = new Map<string, Map<string, SeriesPoint>>(); // canonical → snapshotAt → point
 
   for (const r of records) {
-    const at = r.meta['snapshotAt'];
+    const at = r.meta['snapshotId'] ?? r.meta['snapshotAt'];
     if (at === undefined) continue;
     if (r.sku === null) continue;
     const canonical = normalizeSku(r.sku).canonical;

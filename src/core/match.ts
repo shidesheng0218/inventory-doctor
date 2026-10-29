@@ -45,6 +45,26 @@ export function groupByCanonicalSku(records: InventoryRecord[], source: string):
   return map;
 }
 
+// Build once per rule invocation, rather than rebuilding a source's buckets for
+// every candidate record or source pair. Map order preserves source encounter order.
+export function indexBySourceSku(records: InventoryRecord[]): Map<string, Map<string, SkuBucket>> {
+  const index = new Map<string, Map<string, SkuBucket>>();
+  for (const r of records) {
+    let grouped = index.get(r.source);
+    if (!grouped) {
+      grouped = new Map<string, SkuBucket>();
+      index.set(r.source, grouped);
+    }
+    if (r.sku === null) continue;
+    const canonical = normalizeSku(r.sku).canonical;
+    if (canonical === '') continue;
+    const bucket = grouped.get(canonical) ?? { canonical, records: [] };
+    bucket.records.push(r);
+    grouped.set(canonical, bucket);
+  }
+  return index;
+}
+
 export interface SkuLocationBucket {
   canonical: string;
   location: string | null;

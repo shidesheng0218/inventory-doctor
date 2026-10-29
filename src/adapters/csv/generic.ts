@@ -37,6 +37,8 @@ export function parseGenericCsv(
   const barcodeHeader = pickHeader('barcode', mapping.barcode);
   const titleHeader = pickHeader('title', mapping.title);
   const locationHeader = pickHeader('location', mapping.location);
+  const trackedHeader = pickHeader('tracked');
+  const policyHeader = pickHeader('inventoryPolicy');
 
   if (!skuHeader) {
     const recognized = [...fields.entries()].map(([header, field]) => `${header} → ${field}`);
@@ -54,7 +56,7 @@ export function parseGenericCsv(
   }
 
   const knownHeaders = new Set<string>([...fields.keys()]);
-  for (const h of [skuHeader, quantityHeader, barcodeHeader, titleHeader, locationHeader]) {
+  for (const h of [skuHeader, quantityHeader, barcodeHeader, titleHeader, locationHeader, trackedHeader, policyHeader]) {
     if (h) knownHeaders.add(h);
   }
 
@@ -71,6 +73,16 @@ export function parseGenericCsv(
       if (v !== undefined && v !== '') meta[header] = v;
     }
 
+    const tracker = trackedHeader ? row[trackedHeader]?.trim().toLowerCase() : undefined;
+    const tracked = tracker === undefined ? null
+      : ['shopify', 'true', 'yes', '1'].includes(tracker) ? true
+      : ['', 'false', 'no', '0'].includes(tracker) ? false : null;
+    const policy = policyHeader ? row[policyHeader]?.trim().toLowerCase() : undefined;
+    if (policy !== undefined) {
+      meta['inventoryPolicy'] = ['true', 'yes', '1', 'continue'].includes(policy) ? 'continue'
+        : ['false', 'no', '0', 'deny'].includes(policy) ? 'deny' : policy;
+    }
+
     records.push({
       source,
       sku,
@@ -78,9 +90,11 @@ export function parseGenericCsv(
       title: titleHeader ? blankToNull(row[titleHeader]) : null,
       location: locationHeader ? blankToNull(row[locationHeader]) : null,
       quantity,
+      quantityBasis: fields.get(quantityHeader) === 'available' ? 'available'
+        : fields.get(quantityHeader) === 'onHandCurrent' ? 'on_hand' : 'unknown',
       quantityRaw,
       cellIsBlank: isBlank,
-      tracked: null,
+      tracked,
       meta,
     });
   }

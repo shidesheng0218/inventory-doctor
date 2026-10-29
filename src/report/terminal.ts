@@ -1,5 +1,9 @@
 import type { DiagnoseReport, Finding, Severity } from '../core/types.js';
 
+function cleanTerminal(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u001B]/g, '').replace(/\r?\n/g, ' ');
+}
+
 const TAG: Record<Severity, string> = {
   critical: '[CRITICAL]',
   warning: '[WARN]    ',
@@ -11,9 +15,9 @@ export function renderTerminal(report: DiagnoseReport): string {
   lines.push('');
   lines.push('inventory-doctor — sync diagnosis');
   lines.push('='.repeat(60));
-  lines.push(`Sources: ${report.sources.join('  vs  ')}`);
+  lines.push(`Sources: ${report.sources.map(cleanTerminal).join('  vs  ')}`);
   for (const [source, count] of Object.entries(report.recordCounts)) {
-    lines.push(`  ${source}: ${count} records`);
+    lines.push(`  ${cleanTerminal(source)}: ${count} records`);
   }
   lines.push('');
   lines.push(`Sync health score: ${report.healthScore}/100`);
@@ -30,13 +34,13 @@ export function renderTerminal(report: DiagnoseReport): string {
     lines.push(`${severity.toUpperCase()} (${findings.length})`);
     lines.push('-'.repeat(60));
     for (const f of findings) {
-      lines.push(`${TAG[severity]} ${f.message}`);
-      if (f.evidence?.length) lines.push(`           observed: ${f.evidence.join(' | ')}`);
-      if (f.risk) lines.push(`           risk: ${f.risk}`);
-      if (f.assumptions?.length) lines.push(`           assumptions: ${f.assumptions.join(' | ')}`);
-      if (f.verification?.length) lines.push(`           verify: ${f.verification.join(' | ')}`);
-      lines.push(`           rule: ${f.rule}`);
-      lines.push(`           fix:  ${f.suggestion}`);
+      lines.push(`${TAG[severity]} ${cleanTerminal(f.message)}`);
+      if (f.evidence?.length) lines.push(`           observed: ${f.evidence.map(cleanTerminal).join(' | ')}`);
+      if (f.risk) lines.push(`           risk: ${cleanTerminal(f.risk)}`);
+      if (f.assumptions?.length) lines.push(`           assumptions: ${f.assumptions.map(cleanTerminal).join(' | ')}`);
+      if (f.verification?.length) lines.push(`           verify: ${f.verification.map(cleanTerminal).join(' | ')}`);
+      lines.push(`           rule: ${cleanTerminal(f.rule)}`);
+      lines.push(`           fix:  ${cleanTerminal(f.suggestion)}`);
     }
     lines.push('');
   }

@@ -1,4 +1,5 @@
 import type { TokenProvider } from './token-provider.js';
+import { validateShopifyDomain } from './domain.js';
 
 // Shopify GraphQL Admin API client.
 //   - API version is pinned explicitly in the URL: 2026-07 (latest stable).
@@ -59,6 +60,7 @@ export class ShopifyClient {
   private readonly timeoutMs: number;
 
   constructor(private readonly options: ShopifyClientOptions) {
+    options.domain = validateShopifyDomain(options.domain);
     this.fetchFn = options.fetchFn ?? fetch;
     this.sleep = options.sleep ?? defaultSleep;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;

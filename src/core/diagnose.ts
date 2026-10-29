@@ -1,5 +1,5 @@
 import type { DiagnoseOptions, DiagnoseReport, Finding, InventoryRecord, Severity } from './types.js';
-import { DEFAULT_DIAGNOSE_OPTIONS } from './types.js';
+import { DEFAULT_DIAGNOSE_OPTIONS, validateDiagnoseOptions } from './types.js';
 import { distinctSources } from './match.js';
 import { normalizeSku } from './normalize.js';
 import { skuMismatch } from './rules/sku-mismatch.js';
@@ -56,6 +56,7 @@ export function diagnose(
   records: InventoryRecord[],
   options: DiagnoseOptions = DEFAULT_DIAGNOSE_OPTIONS,
 ): DiagnoseReport {
+  validateDiagnoseOptions(options);
   const disabled = new Set(options.disabledRules ?? []);
   const findings: Finding[] = [];
   for (const rule of RULES) {

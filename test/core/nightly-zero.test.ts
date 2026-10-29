@@ -12,6 +12,19 @@ const T2 = '2026-09-02T08:00:00';
 const T3 = '2026-09-03T08:00:00';
 
 describe('nightly-zero (time-series rule)', () => {
+  it('orders shuffled same-second snapshots by numeric sequence across many rows', () => {
+    const records = [10, 2, 1].flatMap((sequence) =>
+      Array.from({ length: 100 }, (_, i) => rec({
+        sku: `SKU-${i}`,
+        quantity: sequence === 10 ? 0 : 10,
+        meta: { snapshotId: `snapshot-${sequence}`, snapshotAt: T1, snapshotSequence: String(sequence) },
+      })),
+    );
+    const findings = nightlyZero(records);
+    expect(findings).toHaveLength(100);
+    expect(findings.every((finding) => finding.detail['latest'] === 'snapshot-10')).toBe(true);
+  });
+
   it('flags a stable-stocked SKU that reads 0 in the latest snapshot', () => {
     const records = [
       snap('WIDGET-1', 12, T1),

@@ -25,21 +25,21 @@ describe('CSV detection + parsing', () => {
   it('accepts the OLD Shopify product CSV headers', () => {
     const { records, detection } = loadCsv(OLD_HEADERS_PRODUCT, 'old');
     expect(detection.format).toBe('shopify-product');
-    expect(records[0]).toMatchObject({ sku: 'ABC-123', barcode: '111', quantity: 10, tracked: true });
+    expect(records[0]).toMatchObject({ sku: 'ABC-123', barcode: '111', quantity: 10, tracked: true, quantityBasis: 'inventory' });
   });
 
   it('accepts the NEW Shopify product CSV headers (same records)', () => {
     const { records, detection } = loadCsv(NEW_HEADERS_PRODUCT, 'new');
     expect(detection.format).toBe('shopify-product');
-    expect(records[0]).toMatchObject({ sku: 'ABC-123', barcode: '111', quantity: 10, tracked: true });
+    expect(records[0]).toMatchObject({ sku: 'ABC-123', barcode: '111', quantity: 10, tracked: true, quantityBasis: 'inventory' });
   });
 
   it('parses the long inventory format: one record per variant × location', () => {
     const { records, detection } = loadCsv(LONG_INVENTORY, 'inv');
     expect(detection.format).toBe('shopify-inventory-long');
     expect(records).toHaveLength(2);
-    expect(records[0]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse A', quantity: 8 });
-    expect(records[1]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse B', quantity: 4 });
+    expect(records[0]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse A', quantity: 8, quantityBasis: 'available' });
+    expect(records[1]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse B', quantity: 4, quantityBasis: 'available' });
     expect(records[0]?.meta['committed']).toBe('2');
     expect(records[1]?.meta['incoming']).toBe('1');
   });
@@ -49,7 +49,7 @@ describe('CSV detection + parsing', () => {
     expect(detection.format).toBe('shopify-inventory-wide');
     expect(detection.locationColumns).toEqual(['Warehouse A', 'Warehouse B']);
     expect(records).toHaveLength(4);
-    expect(records[0]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse A', quantity: 8 });
+    expect(records[0]).toMatchObject({ sku: 'ABC-123', location: 'Warehouse A', quantity: 8, quantityBasis: 'unknown' });
     // Blank cell in a wide table stays null, NOT zero.
     const blank = records.find((r) => r.sku === 'DEF-456' && r.location === 'Warehouse A');
     expect(blank?.quantity).toBeNull();
@@ -85,6 +85,57 @@ describe('CSV detection + parsing', () => {
     const weird = 'Item Code,Stock Count\nW-1,3\n';
     const { records } = loadCsv(weird, 'weird', { sku: 'Item Code', quantity: 'Stock Count' });
     expect(records[0]).toMatchObject({ sku: 'W-1', quantity: 3 });
+  });
+
+  it('uses on-hand basis only when long inventory has no Available column', () => {
+    const { records, detection } = loadCsv('SKU,Location,On hand (current)\nA,Main,10\n', 'on-hand');
+    expect(detection.format).toBe('shopify-inventory-long');
+    expect(records[0]).toMatchObject({ quantity: 10, quantityBasis: 'on_hand' });
+  });
+
+  it.each([
+    ['Available', 'available'],
+    ['Available (not editable)', 'available'],
+    ['On hand (current)', 'on_hand'],
+    ['On hand (new)', 'on_hand'],
+    ['Inventory quantity', 'unknown'],
+    ['Quantity', 'unknown'],
+    ['Custom count', 'unknown'],
+  ])('identifies generic mapped quantity basis from %s', (header, basis) => {
+    const { records, detection } = loadCsv(`SKU,${header}\nA,7\n`, 'mapped', { quantity: header });
+    expect(detection.format).toBe('generic');
+    expect(records[0]).toMatchObject({ quantity: 7, quantityBasis: basis });
+  });
+
+  it('does not infer generic basis from other quantity columns or metadata', () => {
+    const content = 'SKU,Quantity,Available,On hand (current),quantityBasis\nA,3,8,10,available\n';
+    const { records } = loadCsv(content, 'mapped', { quantity: 'Quantity' });
+    expect(records[0]).toMatchObject({ quantity: 3, quantityBasis: 'unknown', meta: { quantityBasis: 'available' } });
+    expect(loadCsv('SKU,Quantity\nA,3\n', 'generic').records[0]?.quantityBasis).toBe('unknown');
+  });
+
+  it.each([
+    ['shopify', true], ['TRUE', true], [' yes ', true], ['1', true],
+    ['', false], ['false', false], ['NO', false], ['0', false], ['custom', null],
+  ] as const)('preserves generic tracker semantics for %j', (value, tracked) => {
+    const { records } = loadCsv(`SKU,Quantity,Inventory tracker\nA,3,${value}\n`, 'generic');
+    expect(records[0]).toMatchObject({ tracked, quantityBasis: 'unknown' });
+  });
+
+  it.each([
+    ['continue', 'continue'], ['TRUE', 'continue'], [' yes ', 'continue'], ['1', 'continue'],
+    ['deny', 'deny'], ['false', 'deny'], ['NO', 'deny'], ['0', 'deny'], ['', ''], ['custom', 'custom'],
+  ])('preserves generic inventory policy semantics for %j', (value, policy) => {
+    const { records } = loadCsv(`SKU,Quantity,Continue selling when out of stock\nA,3,${value}\n`, 'generic');
+    expect(records[0]?.meta['inventoryPolicy']).toBe(policy);
+    expect(records[0]?.tracked).toBeNull();
+  });
+
+  it('preserves tracker and policy when explicit mapping overrides Shopify detection', () => {
+    const content = 'SKU,Location,Available,Inventory tracker,Inventory policy\nA,Main,8,shopify,continue\n';
+    const { records, detection } = loadCsv(content, 'mapped', { quantity: 'Available' });
+    expect(detection.format).toBe('generic');
+    expect(records[0]).toMatchObject({ quantityBasis: 'available', tracked: true, meta: { inventoryPolicy: 'continue' } });
   });
 
   it('throws a helpful error when no SKU column can be found', () => {

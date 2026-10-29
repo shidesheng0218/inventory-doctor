@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,6 +44,18 @@ describe('fixtures end-to-end', () => {
     const blankFindings = report.findings.filter((f) => f.rule === 'blank-vs-zero');
     expect(blankFindings).toHaveLength(1);
     expect(blankFindings[0]?.sku).toBe('BLANK-1');
+  });
+
+  it('markdown contains backticks and HTML-looking source names within code spans', async () => {
+    const { report } = await runDiff([{ kind: 'csv', path: A }, { kind: 'csv', path: B }]);
+    const source = '`<img src=x onerror=alert(1)>``\\path|end';
+    report.sources = [source];
+    report.recordCounts = { [source]: 1 };
+    const markdown = renderMarkdown(report);
+    const literal = '``` `<img src=x onerror=alert(1)>``\\path\\|end ```';
+    expect(markdown).toContain(`**Sources:** ${literal}`);
+    expect(markdown).toContain(`| ${literal} | 1 |`);
+    expect(markdown).not.toContain('\\`');
   });
 
   it('markdown preserves evidence and conditional interpretation', async () => {
@@ -118,7 +130,7 @@ describe('Amazon-style TSV fixture end-to-end', () => {
   it('parses fixtures/amazon-export.txt via generic probing without any mapping', async () => {
     const { sources } = await runDiff([
       { kind: 'csv', path: 'fixtures/amazon-export.txt' },
-      { kind: 'csv', path: 'fixtures/amazon-export.txt' },
+      { kind: 'csv', path: 'fixtures/amazon-export.txt', name: 'amazon-copy' },
     ]);
     const [amazon] = sources;
     expect(amazon?.detail).toContain('unrecognized');
@@ -154,6 +166,27 @@ describe('load failures are loud, never a vacuous "healthy" report', () => {
     const blank = join(dir, 'blank-skus.csv');
     await writeFile(blank, 'Handle,Title,SKU,Variant Inventory Qty\nw,Widget,,5\n', 'utf8');
     await expect(runDiff([{ kind: 'csv', path: blank }, { kind: 'csv', path: A }])).rejects.toThrow(/0 records/);
+  });
+
+  it('rejects duplicate source names', async () => {
+    await expect(runDiff([
+      { kind: 'csv', path: A },
+      { kind: 'csv', path: A },
+    ])).rejects.toThrow(/Duplicate source name/);
+  });
+
+  it('rejects files from different directories with the same basename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'inventory-doctor-duplicate-'));
+    try {
+      const first = join(root, 'one', 'export.csv');
+      const second = join(root, 'two', 'export.csv');
+      await Promise.all([mkdir(join(root, 'one')), mkdir(join(root, 'two'))]);
+      await writeFile(first, 'Handle,Title,SKU,Variant Inventory Qty\nw,Widget,W-1,1\n');
+      await writeFile(second, 'Handle,Title,SKU,Variant Inventory Qty\nw,Widget,W-1,2\n');
+      await expect(runDiff([{ kind: 'csv', path: first }, { kind: 'csv', path: second }])).rejects.toThrow(/Duplicate source name/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('says "CSV file not found" instead of a raw ENOENT', async () => {

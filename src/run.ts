@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { DiagnoseOptions, DiagnoseReport, Finding, InventoryRecord } from './core/types.js';
-import { DEFAULT_DIAGNOSE_OPTIONS } from './core/types.js';
+import { DEFAULT_DIAGNOSE_OPTIONS, validateDiagnoseOptions } from './core/types.js';
 import { diagnose } from './core/diagnose.js';
 import { normalizeSku } from './core/normalize.js';
 import { loadCsv, type CsvAdapterResult } from './adapters/csv/index.js';
@@ -48,6 +48,7 @@ export interface LoadedSource {
   name: string;
   records: InventoryRecord[];
   detail: string; // e.g. detected CSV format, shown to the user
+  warnings?: string[];
 }
 
 export interface LoadOptions {
@@ -91,6 +92,7 @@ async function loadSourceUnchecked(input: SourceInput, options: LoadOptions): Pr
       name: `${snapshot.name}@${snapshot.id}`,
       records: snapshot.records,
       detail: `snapshot saved ${snapshot.savedAt} (${snapshot.recordCount} records)`,
+      warnings: snapshot.warnings,
     };
   }
 
@@ -120,11 +122,22 @@ async function loadSourceUnchecked(input: SourceInput, options: LoadOptions): Pr
   return { name: store.name, records, detail: `Shopify Admin API (${store.domain})` };
 }
 
+function assertUniqueSourceNames(sources: LoadedSource[]): void {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (seen.has(source.name)) {
+      throw new Error(`Duplicate source name ${JSON.stringify(source.name)}. Give each source a unique name (for CSV files, use distinct basenames).`);
+    }
+    seen.add(source.name);
+  }
+}
+
 export async function runDiff(
   inputs: [SourceInput, SourceInput],
   options: LoadOptions & { diagnose?: Partial<DiagnoseOptions> } = {},
 ): Promise<{ report: DiagnoseReport; sources: LoadedSource[] }> {
   const loaded = await Promise.all(inputs.map((input) => loadSource(input, options)));
+  assertUniqueSourceNames(loaded);
   const records = loaded.flatMap((s) => s.records);
   const diagnoseOptions = await resolveDiagnoseOptions(options);
   return { report: diagnose(records, diagnoseOptions), sources: loaded };
@@ -136,7 +149,7 @@ export async function resolveDiagnoseOptions(
 ): Promise<DiagnoseOptions> {
   const config = await loadConfigIfExists(options.configPath);
   const rules = config?.rules;
-  return {
+  const resolved: DiagnoseOptions = {
     ...DEFAULT_DIAGNOSE_OPTIONS,
     ...(rules?.driftAbsThreshold !== undefined ? { driftAbsThreshold: rules.driftAbsThreshold } : {}),
     ...(rules?.driftPctThreshold !== undefined ? { driftPctThreshold: rules.driftPctThreshold } : {}),
@@ -146,14 +159,17 @@ export async function resolveDiagnoseOptions(
     ...(rules?.ignoreSkus !== undefined ? { ignoreSkus: rules.ignoreSkus } : {}),
     ...(rules?.severityOverrides !== undefined ? { severityOverrides: rules.severityOverrides } : {}),
     ...(config?.bundles !== undefined ? { bundles: config.bundles } : {}),
-    ...options.diagnose, // explicit CLI flags last — they win
+    ...Object.fromEntries(Object.entries(options.diagnose ?? {}).filter(([, value]) => value !== undefined)), // explicit flags win
   };
+  validateDiagnoseOptions(resolved);
+  return resolved;
 }
 
 export interface SkuExplanation {
   sku: string;
   canonical: string;
   found: boolean;
+  warnings: string[];
   perSource: Array<{
     source: string;
     matched: boolean;
@@ -164,6 +180,7 @@ export interface SkuExplanation {
       location: string | null;
       quantity: number | null;
       quantityRaw: string;
+      quantityBasis: NonNullable<InventoryRecord['quantityBasis']>;
       tracked: boolean | null;
     }>;
   }>;
@@ -177,6 +194,7 @@ export async function explainSku(
   options: LoadOptions & { diagnose?: Partial<DiagnoseOptions> } = {},
 ): Promise<SkuExplanation> {
   const loaded = await Promise.all(inputs.map((input) => loadSource(input, options)));
+  assertUniqueSourceNames(loaded);
   const canonical = normalizeSku(sku).canonical;
 
   const perSource = loaded.map((s) => {
@@ -193,6 +211,7 @@ export async function explainSku(
         location: r.location,
         quantity: r.quantity,
         quantityRaw: r.quantityRaw,
+        quantityBasis: r.quantityBasis ?? 'unknown',
         tracked: r.tracked,
       })),
     };
@@ -209,6 +228,7 @@ export async function explainSku(
     sku,
     canonical,
     found: perSource.some((s) => s.matched),
+    warnings: [...new Set(loaded.flatMap((s) => s.warnings ?? []))],
     perSource,
     findings,
   };
@@ -220,14 +240,16 @@ export interface HealthResult {
   healthScore: number;
   healthSummary: DiagnoseReport['healthSummary'];
   countsBySeverity: Record<'critical' | 'warning' | 'info', number>;
+  warnings: string[];
 }
 
 // Lightweight summary without the full findings list.
 export async function inventoryHealth(
   inputs: SourceInput[],
-  options: LoadOptions = {},
+  options: LoadOptions & { diagnose?: Partial<DiagnoseOptions> } = {},
 ): Promise<HealthResult> {
   const loaded = await Promise.all(inputs.map((input) => loadSource(input, options)));
+  assertUniqueSourceNames(loaded);
   const report = diagnose(loaded.flatMap((s) => s.records), await resolveDiagnoseOptions(options));
   const countsBySeverity = { critical: 0, warning: 0, info: 0 };
   for (const f of report.findings) countsBySeverity[f.severity] += 1;
@@ -237,6 +259,7 @@ export async function inventoryHealth(
     healthScore: report.healthScore,
     healthSummary: report.healthSummary,
     countsBySeverity,
+    warnings: [...new Set(loaded.flatMap((s) => s.warnings ?? []))],
   };
 }
 
@@ -260,6 +283,7 @@ export interface SnapshotCheckResult {
   /** True when only the newest part of the history was loaded. */
   windowed: boolean;
   findings: Finding[];
+  warnings: string[];
 }
 
 // Time-series check over the saved snapshots of one source. Runs only the
@@ -277,5 +301,6 @@ export async function runSnapshotCheck(
     totalSnapshots: stubs.length,
     windowed: loaded.length < stubs.length,
     findings: nightlyZero(loaded.flatMap((s) => s.records)),
+    warnings: [...new Set(loaded.flatMap((s) => s.warnings))],
   };
 }

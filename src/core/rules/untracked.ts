@@ -1,12 +1,13 @@
 import type { Finding, InventoryRecord } from '../types.js';
-import { groupByCanonicalSku, distinctSources } from '../match.js';
+import { indexBySourceSku } from '../match.js';
 import { normalizeSku } from '../normalize.js';
 
 // R6 — inventory tracker off in one source while another source manages stock
 // for the same SKU: the untracked side will never decrement, so sync drifts.
 export function untracked(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
-  const sources = distinctSources(records);
+  const index = indexBySourceSku(records);
+  const sources = [...index.keys()];
 
   for (const r of records) {
     if (r.tracked !== false) continue;
@@ -17,7 +18,7 @@ export function untracked(records: InventoryRecord[]): Finding[] {
     let managedElsewhere: string | null = null;
     for (const other of sources) {
       if (other === r.source) continue;
-      const bucket = groupByCanonicalSku(records, other).get(canonical);
+      const bucket = index.get(other)?.get(canonical);
       if (bucket && bucket.records.some((x) => x.tracked === true || x.quantity !== null)) {
         managedElsewhere = other;
         break;

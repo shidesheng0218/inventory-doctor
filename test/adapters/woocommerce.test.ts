@@ -49,6 +49,38 @@ describe('WooClient', () => {
     expect(url2).toContain('page=2');
   });
 
+  it.each([null, '', 'nope', '-1', '1.5', '2x', 'Infinity', '9007199254740992'])(
+    'rejects invalid pagination header %s', async (header) => {
+      const headers: Record<string, string> = header === null ? {} : { 'X-WP-TotalPages': header };
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response('[]', { headers }));
+      await expect(makeClient(fetchFn).getAll('/products')).rejects.toThrow(/missing or invalid X-WP-TotalPages/);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('rejects a zero-page response containing records and non-array bodies', async () => {
+    const nonempty = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([{ id: 1 }], 0));
+    await expect(makeClient(nonempty).getAll('/products')).rejects.toThrow(/zero total pages requires an empty first page/);
+    const invalid = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ products: [] }));
+    await expect(makeClient(invalid).getAll('/products')).rejects.toThrow(/expected an array/);
+  });
+
+  it('allows a genuinely empty store to report zero pages', async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([], 0));
+    await expect(makeClient(fetchFn).getAll('/products')).resolves.toEqual([]);
+  });
+
+  it.each([1, 3])('rejects page-count changes to %i and empty continuation pages', async (changedPages) => {
+    const changed = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([{ id: 1 }], 2))
+      .mockResolvedValueOnce(jsonResponse([{ id: 2 }], changedPages));
+    await expect(makeClient(changed).getAll('/products')).rejects.toThrow(/total pages changed/);
+    const empty = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([{ id: 1 }], 2))
+      .mockResolvedValueOnce(jsonResponse([], 2));
+    await expect(makeClient(empty).getAll('/products')).rejects.toThrow(/unexpected empty continuation/);
+  });
+
   it('backs off 1s and retries on HTTP 429', async () => {
     const sleeps: number[] = [];
     const fetchFn = vi

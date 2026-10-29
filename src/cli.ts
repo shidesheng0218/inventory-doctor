@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { runDiff, runSnapshotCheck, loadSource, parseSourceArg, type LoadOptions, type SourceInput } from './run.js';
-import { saveSnapshot, listSnapshots, pruneSnapshots, planPruneSnapshots } from './snapshots.js';
+import { saveSnapshot, listSnapshotStubs, pruneSnapshots, planPruneSnapshots } from './snapshots.js';
 import { skuHistory } from './history.js';
 import { sendWebhook } from './notify.js';
 import { loadConfigIfExists } from './config.js';
@@ -66,7 +66,7 @@ program
       const { report } = await runDiff([
         { kind: 'csv', path: resolve(root, 'fixtures/shopify-store-a.csv') },
         { kind: 'csv', path: resolve(root, 'fixtures/shopify-store-b.csv') },
-      ]);
+      ], { configPath: resolve(root, 'fixtures/demo-config.json') });
       process.stderr.write('Synthetic demonstration data; findings are examples, not verified incidents.\n');
       process.stdout.write(opts.format === 'json' ? renderJson(report) : opts.format === 'html' ? renderHtml(report) : opts.format === 'markdown' ? renderMarkdown(report) : renderTerminal(report));
       // A demonstration succeeds even when its deliberately seeded findings are critical.
@@ -87,8 +87,14 @@ program
   .option('--config <path>', 'path to inventory-doctor.json')
   .option('--format <format>', 'output format: terminal | json | markdown | html', 'terminal')
   .option('--map <field=header>', 'column mapping for unrecognized CSV files', collect, [])
-  .option('--drift-abs <n>', 'absolute quantity drift threshold', (v) => Number(v))
-  .option('--drift-pct <n>', 'percentage quantity drift threshold (0-1)', (v) => Number(v))
+  .option('--drift-abs <n>', 'absolute quantity drift threshold', (v) => {
+    if (!/^\d+(?:\.\d+)?$/.test(v) || !Number.isFinite(Number(v))) throw new Error('--drift-abs must be a finite non-negative number');
+    return Number(v);
+  })
+  .option('--drift-pct <n>', 'percentage quantity drift threshold (0-1)', (v) => {
+    if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(v)) throw new Error('--drift-pct must be a number between 0 and 1');
+    return Number(v);
+  })
   .option('--baseline <ref>', 'compare one source against a saved snapshot ("<name>", "<name>@<id>", or a .jsonl path)')
   .option('--fix-export <path>', 'write an available-quantity review proposal (NOT a Shopify import file)')
   .option('--force', 'allow --fix-export to overwrite an existing file')
@@ -96,7 +102,7 @@ program
     try {
       const inputs: SourceInput[] = [];
       for (const path of [fileA, fileB, ...(opts.csv as string[])]) {
-        if (path) inputs.push({ kind: 'csv', path });
+        if (path) inputs.push(parseSourceArg(path));
       }
       for (const name of opts.store as string[]) {
         inputs.push({ kind: 'store', name });
@@ -133,6 +139,7 @@ program
 
       for (const s of sources) {
         process.stderr.write(`loaded ${s.name}: ${s.records.length} records (${s.detail})\n`);
+        for (const warning of s.warnings ?? []) process.stderr.write(`warning: ${warning}\n`);
       }
 
       const format = opts.format as OutputFormat;
@@ -197,13 +204,18 @@ snapshot
   .description('List saved snapshots for a source name.')
   .argument('<name>', 'snapshot group name')
   .action(async (name: string) => {
-    const infos = await listSnapshots(name);
-    if (infos.length === 0) {
-      process.stdout.write(`no snapshots for "${name}"\n`);
-      return;
-    }
-    for (const i of infos) {
-      process.stdout.write(`${name}@${i.id}  ${i.recordCount} records  ${i.path}\n`);
+    try {
+      const infos = await listSnapshotStubs(name);
+      if (infos.length === 0) {
+        process.stdout.write(`no snapshots for "${name}"\n`);
+        return;
+      }
+      for (const i of infos) {
+        process.stdout.write(`${name}@${i.id}  ${i.savedAt}  ${i.path}\n`);
+      }
+    } catch (err) {
+      process.stderr.write(`error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 2;
     }
   });
 
@@ -243,6 +255,7 @@ snapshot
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
       const checkOptions = opts.window === undefined ? {} : { maxSnapshots: integerOption(opts.window, '--window') };
       const result = await runSnapshotCheck(name, checkOptions);
+      for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
       const scope = result.windowed
         ? `${result.snapshots.length} of ${result.totalSnapshots} snapshots (windowed)`
         : `${result.snapshots.length} snapshots`;
@@ -299,6 +312,7 @@ snapshot
     try {
       // exactOptionalPropertyTypes: simply omit the option when no window was asked for.
       const history = await skuHistory(sku, name, opts.window === undefined ? {} : { maxSnapshots: integerOption(opts.window, '--window') });
+      for (const warning of history.warnings) process.stderr.write(`warning: ${warning}\n`);
       if (!history.found) {
         process.stdout.write(`no records for SKU "${sku}" in snapshot history "${name}"\n`);
         return;

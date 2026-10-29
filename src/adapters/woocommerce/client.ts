@@ -75,8 +75,19 @@ export class WooClient {
         const text = await res.text().catch(() => '');
         throw new Error(`WooCommerce API HTTP ${res.status} from ${this.base}: ${text}`);
       }
-      const totalPages = Number(res.headers.get('X-WP-TotalPages') ?? '1') || 1;
-      return { data: (await res.json()) as T[], totalPages };
+      const header = res.headers.get('X-WP-TotalPages');
+      const totalPages = header !== null && /^\d+$/.test(header) ? Number(header) : NaN;
+      if (!Number.isSafeInteger(totalPages) || totalPages < 0) {
+        throw new Error(`WooCommerce pagination for ${path} page ${page}: missing or invalid X-WP-TotalPages header`);
+      }
+      const data: unknown = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error(`WooCommerce pagination for ${path} page ${page}: expected an array response`);
+      }
+      if (totalPages === 0 && (page !== 1 || data.length !== 0)) {
+        throw new Error(`WooCommerce pagination for ${path} page ${page}: zero total pages requires an empty first page`);
+      }
+      return { data: data as T[], totalPages };
     }
 
     throw lastError ?? new Error(`WooCommerce API request failed after ${this.maxRetries} retries.`);
@@ -85,9 +96,19 @@ export class WooClient {
   // All pages of a collection endpoint, flattened.
   async getAll<T>(path: string): Promise<T[]> {
     const first = await this.getPage<T>(path, 1);
+    if (first.data.length === 0 && first.totalPages > 1) {
+      throw new Error(`WooCommerce pagination for ${path}: empty first page with ${first.totalPages} total pages`);
+    }
     const out = [...first.data];
     for (let page = 2; page <= first.totalPages; page++) {
-      out.push(...(await this.getPage<T>(path, page)).data);
+      const next = await this.getPage<T>(path, page);
+      if (next.totalPages !== first.totalPages) {
+        throw new Error(`WooCommerce pagination for ${path} page ${page}: total pages changed from ${first.totalPages} to ${next.totalPages}; retry with a stable catalog`);
+      }
+      if (next.data.length === 0) {
+        throw new Error(`WooCommerce pagination for ${path} page ${page}: unexpected empty continuation page`);
+      }
+      out.push(...next.data);
     }
     return out;
   }

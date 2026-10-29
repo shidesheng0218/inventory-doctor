@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findStore, loadConfig, resolveSecret } from '../src/config.js';
@@ -21,6 +21,38 @@ describe('config', () => {
     expect(config.stores).toHaveLength(2);
     expect(findStore(config, 'store-b').domain).toBe('b.myshopify.com');
     expect(() => findStore(config, 'nope')).toThrow(/not found/);
+  });
+
+  it.each(['stores', 'woocommerce', 'cross-platform'] as const)('rejects duplicate source names in %s', async (scope) => {
+    const dir = await mkdtemp(join(tmpdir(), 'invdoc-'));
+    try {
+      const path = join(dir, 'inventory-doctor.json');
+      const shopify = { name: 'shared-name', domain: 'a.myshopify.com', accessToken: 'token' };
+      const woo = { name: 'shared-name', baseUrl: 'https://shop.example.com', consumerKey: 'key', consumerSecret: 'secret' };
+      await writeFile(path, JSON.stringify({
+        stores: scope === 'woocommerce' ? [] : scope === 'stores' ? [shopify, { ...shopify, domain: 'b.myshopify.com' }] : [shopify],
+        woocommerce: scope === 'stores' ? [] : scope === 'woocommerce' ? [woo, { ...woo, baseUrl: 'https://other.example.com' }] : [woo],
+      }));
+      await expect(loadConfig(path)).rejects.toThrow(/Duplicate source name "shared-name"/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts distinct source names across stores and woocommerce', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'invdoc-'));
+    try {
+      const path = join(dir, 'inventory-doctor.json');
+      await writeFile(path, JSON.stringify({
+        stores: [{ name: 'shopify', domain: 'a.myshopify.com', accessToken: 'token' }],
+        woocommerce: [{ name: 'woo', baseUrl: 'https://shop.example.com', consumerKey: 'key', consumerSecret: 'secret' }],
+      }));
+      const config = await loadConfig(path);
+      expect(config.stores.map((store) => store.name)).toEqual(['shopify']);
+      expect(config.woocommerce?.map((store) => store.name)).toEqual(['woo']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects stores without any credentials', async () => {

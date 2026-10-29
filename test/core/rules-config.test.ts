@@ -60,6 +60,12 @@ describe('rules configuration', () => {
     expect(globToRegExp('SKU-?').test('sku-12')).toBe(false);
   });
 
+  it('rejects invalid drift thresholds at the public diagnose boundary', () => {
+    const records = [rec({ source: 'a', sku: 'X-1', quantity: 0 }), rec({ source: 'b', sku: 'X-1', quantity: 9 })];
+    expect(() => diagnose(records, { driftAbsThreshold: Number.NaN, driftPctThreshold: 0.2 })).toThrow(/driftAbsThreshold/);
+    expect(() => diagnose(records, { driftAbsThreshold: 1, driftPctThreshold: 2 })).toThrow(/driftPctThreshold/);
+  });
+
   it('config validation rejects unknown rules and bad severities', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'invdoc-rules-'));
     const path = join(dir, 'inventory-doctor.json');
@@ -68,6 +74,8 @@ describe('rules configuration', () => {
 
     await writeFile(path, JSON.stringify({ stores: [], rules: { severityOverrides: { 'untracked': 'fatal' } } }));
     await expect(loadConfig(path)).rejects.toThrow(/severity/);
+    await writeFile(path, JSON.stringify({ stores: [], rules: { driftPctThreshold: 2 } }));
+    await expect(loadConfig(path)).rejects.toThrow(/driftPctThreshold/);
   });
 
   it('runDiff applies config rules; CLI flags beat config', async () => {

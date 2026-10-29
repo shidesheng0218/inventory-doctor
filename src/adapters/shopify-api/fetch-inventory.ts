@@ -192,6 +192,7 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
           ...base,
           location: null,
           quantity: qty,
+          quantityBasis: 'unknown',
           quantityRaw: qty === null ? '' : String(qty),
           // Live API read: "blank cell" does not exist here. A null quantity
           // means untracked, not empty — so blank-vs-zero must not fire.
@@ -211,6 +212,7 @@ export async function fetchInventory(client: ShopifyClient, source: string): Pro
           ...base,
           location: level.location.name,
           quantity: available?.quantity ?? null,
+          quantityBasis: available === undefined ? 'unknown' : 'available',
           quantityRaw: available === undefined ? '' : String(available.quantity),
           cellIsBlank: null,
           meta: levelMeta,

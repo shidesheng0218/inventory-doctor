@@ -1,5 +1,5 @@
 import type { Finding, InventoryRecord } from '../types.js';
-import { groupByCanonicalSku, distinctSources } from '../match.js';
+import { indexBySourceSku } from '../match.js';
 import { normalizeSku } from '../normalize.js';
 
 // R3 — blank cell vs explicit "0". A blank quantity cell is the classic root
@@ -10,11 +10,13 @@ import { normalizeSku } from '../normalize.js';
 // records from Shopify/WooCommerce API carry cellIsBlank=null and never fire.
 export function blankVsZero(records: InventoryRecord[]): Finding[] {
   const findings: Finding[] = [];
-  const sources = distinctSources(records);
+  const index = indexBySourceSku(records);
+  const sources = [...index.keys()];
 
   for (const r of records) {
-    if (r.sku === null || normalizeSku(r.sku).canonical === '') continue;
-    if (r.cellIsBlank !== true) continue; // only genuine blank cells, from CSV sources
+    if (r.cellIsBlank !== true || r.sku === null) continue;
+    const canonical = normalizeSku(r.sku).canonical;
+    if (canonical === '') continue; // only genuine blank cells, from CSV sources
 
     // Is this SKU managed (with a real quantity) in another source? Then the
     // blank is dangerous: a sync could overwrite that quantity with 0.
@@ -22,8 +24,7 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
     if (sources.length > 1) {
       for (const other of sources) {
         if (other === r.source) continue;
-        const grouped = groupByCanonicalSku(records, other);
-        const bucket = grouped.get(normalizeSku(r.sku).canonical);
+        const bucket = index.get(other)?.get(canonical);
         if (bucket && bucket.records.some((x) => x.quantity !== null)) {
           managedElsewhere = other;
           break;
