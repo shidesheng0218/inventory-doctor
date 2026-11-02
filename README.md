@@ -176,7 +176,7 @@ Run a diff in CI with the composite action from this repo (published to the
 marketplace):
 
 ```yaml
-- uses: shidesheng0218/inventory-doctor@v0.5.0
+- uses: shidesheng0218/inventory-doctor@main   # pin a release tag in production
   with:
     source-a: exports/store-a.csv        # or store:<name> / snapshot:<name>
     source-b: exports/store-b.csv
