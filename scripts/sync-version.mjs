@@ -47,21 +47,37 @@ if (existsSync(join(root, 'server.json'))) {
   write('server.json', JSON.stringify(server, null, 2) + '\n');
 }
 
-// Composite action default (the npm version it runs).
-replaceOnce(
-  'action.yml',
-  /(^ {2}version:\n(?: {4}.*\n)*? {4}default: ')[^']+(')/m,
-  `$1${version}$2`,
-  'inputs.version.default',
-);
+// Composite action default (the npm version it runs). `latest` is a deliberate
+// dist-tag rather than a release declaration, so a version bump leaves it alone.
+const actionBody = read('action.yml');
+const actionDefault = actionBody.match(/^ {2}version:\n(?: {4}.*\n)*? {4}default: '([^']+)'/m)?.[1];
+if (actionDefault === undefined) throw new Error('action.yml: could not find inputs.version.default');
+if (actionDefault === 'latest') {
+  console.log('action.yml inputs.version.default is "latest" — left unchanged');
+} else {
+  replaceOnce(
+    'action.yml',
+    /(^ {2}version:\n(?: {4}.*\n)*? {4}default: ')[^']+(')/m,
+    `$1${version}$2`,
+    'inputs.version.default',
+  );
+}
 
-// README usage example.
-replaceOnce(
-  'README.md',
-  /(uses: shidesheng0218\/inventory-doctor@v)\d+\.\d+\.\d+/,
-  `$1${version}`,
-  'GitHub Action example tag',
-);
+// README usage example. `main` is a moving development ref; a release version
+// replaces a pinned `vX.Y.Z` tag only.
+const readmeBody = read('README.md');
+const readmeRef = readmeBody.match(/uses: shidesheng0218\/inventory-doctor@([^\s#]+)/)?.[1];
+if (readmeRef === undefined) throw new Error('README.md: could not find the GitHub Action example');
+if (readmeRef === 'main') {
+  console.log('README.md action example references "main" — left unchanged');
+} else {
+  replaceOnce(
+    'README.md',
+    /(uses: shidesheng0218\/inventory-doctor@v)\d+\.\d+\.\d+/,
+    `$1${version}`,
+    'GitHub Action example tag',
+  );
+}
 
 if (changed.length === 0) {
   console.log(`already at ${version}`);

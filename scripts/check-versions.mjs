@@ -36,10 +36,23 @@ if (existsSync(join(root, 'server.json'))) {
 
 const action = read('action.yml');
 const actionDefault = action.match(/^ {2}version:\n(?: {4}.*\n)*? {4}default: '([^']+)'/m)?.[1];
-expect('action.yml inputs.version.default', actionDefault, version);
+if (actionDefault === 'latest') {
+  // A dist-tag is not a release declaration: it must resolve on the registry,
+  // and that is exactly what makes it safe when the repo version is tagged but
+  // not yet published.
+  notes.push('action.yml inputs.version.default is the "latest" dist-tag (intentional)');
+} else {
+  expect('action.yml inputs.version.default', actionDefault, version);
+}
 
-const readmeTag = read('README.md').match(/uses: shidesheng0218\/inventory-doctor@v(\d+\.\d+\.\d+)/)?.[1];
-expect('README.md action example tag', readmeTag, version);
+const readmeRef = read('README.md').match(/uses: shidesheng0218\/inventory-doctor@([^\s#]+)/)?.[1];
+if (readmeRef === 'main') {
+  // The example may track the development branch while a release is being
+  // prepared; production users are told to pin a release tag.
+  notes.push('README.md action example references "main" (moving ref, intentional)');
+} else {
+  expect('README.md action example tag', readmeRef, `v${version}`);
+}
 
 // Runtime code must not hardcode a version of its own.
 for (const file of ['src/cli.ts', 'src/mcp.ts']) {
