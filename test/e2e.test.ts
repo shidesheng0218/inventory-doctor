@@ -120,8 +120,10 @@ describe('wide inventory CSV fixtures end-to-end', () => {
     expect(blank).toHaveLength(1);
     expect(blank[0]?.message).toContain('"WIDE-1"');
     expect(blank[0]?.message).toContain('at location "Warehouse A"');
-    // WIDE-2 agrees exactly in both locations → no findings.
-    expect(report.findings.map((f) => f.message).join('\n')).not.toContain('WIDE-2');
+    // WIDE-2 agrees exactly in both locations → no critical/warning findings.
+    // (quantity-basis-mismatch may produce an info-level finding for unknown basis)
+    const criticalOrWarning = report.findings.filter((f) => f.severity === 'critical' || f.severity === 'warning');
+    expect(criticalOrWarning.map((f) => f.message).join('\n')).not.toContain('WIDE-2');
     expect(report.healthSummary).toEqual({ matched: 3, minorDrift: 0, severeDrift: 1, unmatched: 0, totalCompared: 4 });
   });
 });

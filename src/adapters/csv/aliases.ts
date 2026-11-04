@@ -79,6 +79,16 @@ function aliasIndex(): IndexEntry[] {
 
 // Map a raw CSV header to its canonical field, or null if unknown.
 export function resolveHeader(header: string): CanonicalField | null {
+  const trimmed = header.trim().replace(/\s+/g, ' ');
+
+  // 1. First, try exact case-insensitive match against all aliases (preserving suffixes)
+  for (const [field, patterns] of Object.entries(ALIASES) as Array<[CanonicalField, string[]]>) {
+    if (patterns.some((p) => p.toLowerCase() === trimmed.toLowerCase())) {
+      return field;
+    }
+  }
+
+  // 2. Then try normalized match (suffix-stripped) for backward compatibility
   const normalized = normalizeHeader(header);
   const hit = aliasIndex().find((e) => e.normalized === normalized);
   return hit ? hit.field : null;

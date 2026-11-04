@@ -11,6 +11,8 @@ import { computeHealthSummary, healthScore, quantityDrift } from './rules/quanti
 import { untracked } from './rules/untracked.js';
 import { nightlyZero } from './rules/nightly-zero.js';
 import { bundleAvailability } from './rules/bundle-availability.js';
+import { quantityBasisMismatch } from './rules/quantity-basis-mismatch.js';
+import { locationOrphan } from './rules/location-orphan.js';
 
 export const RULES = [
   'sku-mismatch',
@@ -22,6 +24,8 @@ export const RULES = [
   'untracked',
   'nightly-zero',
   'bundle-availability',
+  'quantity-basis-mismatch',
+  'location-orphan',
 ] as const;
 
 export type RuleId = (typeof RULES)[number];
@@ -38,6 +42,8 @@ const RULE_FNS: Record<RuleId, RuleFn> = {
   untracked: (r) => untracked(r),
   'nightly-zero': (r) => nightlyZero(r),
   'bundle-availability': (r, o) => bundleAvailability(r, o),
+  'quantity-basis-mismatch': (r) => quantityBasisMismatch(r),
+  'location-orphan': (r) => locationOrphan(r),
 };
 
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };

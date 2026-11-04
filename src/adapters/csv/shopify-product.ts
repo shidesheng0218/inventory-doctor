@@ -2,6 +2,14 @@ import type { InventoryRecord } from '../../core/types.js';
 import type { CanonicalField } from './aliases.js';
 import { blankToNull, parseQuantityCell, type ParsedCsv } from './parse.js';
 
+// Normalize boolean-like strings for inventory policy.
+function normalizePolicyBoolean(value: string): 'continue' | 'deny' | string {
+  const normalized = value.toLowerCase();
+  if (['true', 'yes', '1', 'continue'].includes(normalized)) return 'continue';
+  if (['false', 'no', '0', 'deny'].includes(normalized)) return 'deny';
+  return normalized;
+}
+
 // Shopify product CSV export (both header generations, resolved via aliases).
 // One record per variant row; no location dimension (product exports don't
 // carry per-location inventory).
@@ -31,7 +39,7 @@ export function parseShopifyProductCsv(parsed: ParsedCsv, source: string, fields
 
     const meta: Record<string, string> = {};
     const policy = blankToNull(get(row, 'inventoryPolicy'));
-    if (policy !== null) meta['inventoryPolicy'] = policy.trim().toLowerCase();
+    if (policy !== null) meta['inventoryPolicy'] = normalizePolicyBoolean(policy.trim());
     for (const [header, value] of Object.entries(row)) {
       if (!fields.has(header) && value !== undefined && value !== '') meta[header] = value;
     }

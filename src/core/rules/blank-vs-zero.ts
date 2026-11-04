@@ -15,6 +15,7 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
 
   for (const r of records) {
     if (r.cellIsBlank !== true || r.sku === null) continue;
+
     const canonical = normalizeSku(r.sku).canonical;
     if (canonical === '') continue; // only genuine blank cells, from CSV sources
 
@@ -25,17 +26,21 @@ export function blankVsZero(records: InventoryRecord[]): Finding[] {
       for (const other of sources) {
         if (other === r.source) continue;
         const bucket = index.get(other)?.get(canonical);
-        if (bucket && bucket.records.some((x) => x.quantity !== null)) {
+        if (bucket && bucket.records.some((x) => (x.tracked === true || x.quantity !== null))) {
           managedElsewhere = other;
           break;
         }
       }
     }
 
+    // Skip untracked items ONLY if they're not managed elsewhere
+    if (r.tracked === false && managedElsewhere === null) continue;
+
     const where = r.location !== null ? ` at location "${r.location}"` : '';
+    const severity = managedElsewhere !== null ? 'critical' : 'warning';
     findings.push({
       rule: 'blank-vs-zero',
-      severity: 'critical',
+      severity,
       sku: r.sku,
       message:
         managedElsewhere !== null
