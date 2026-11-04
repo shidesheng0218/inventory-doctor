@@ -91,7 +91,8 @@ export function parseGenericCsv(
       location: locationHeader ? blankToNull(row[locationHeader]) : null,
       quantity,
       quantityBasis: fields.get(quantityHeader) === 'available' ? 'available'
-        : fields.get(quantityHeader) === 'onHandCurrent' ? 'on_hand' : 'unknown',
+        : (fields.get(quantityHeader) === 'onHandCurrent' || fields.get(quantityHeader) === 'onHandNew') ? 'on_hand'
+        : 'unknown',
       quantityRaw,
       cellIsBlank: isBlank,
       tracked,

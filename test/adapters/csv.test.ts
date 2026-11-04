@@ -138,6 +138,33 @@ describe('CSV detection + parsing', () => {
     expect(records[0]).toMatchObject({ quantityBasis: 'available', tracked: true, meta: { inventoryPolicy: 'continue' } });
   });
 
+  it('distinguishes "On hand (new)" from "On hand (current)" when both are present', () => {
+    const csv = 'SKU,Location,On hand (new),On hand (current)\nX,Main,123,7\n';
+    const { records, detection } = loadCsv(csv, 'test');
+    expect(detection.format).toBe('shopify-inventory-long');
+    // Should default to "On hand (current)" for quantity
+    expect(records[0]?.quantity).toBe(7);
+    expect(records[0]?.quantityBasis).toBe('on_hand');
+    // "On hand (new)" should be preserved in meta
+    expect(records[0]?.meta['onHandNew']).toBe('123');
+  });
+
+  it('normalizes product CSV "Continue selling" TRUE/true/yes/1 to continue', () => {
+    for (const val of ['TRUE', 'true', 'True', 'yes', '1']) {
+      const csv = `Handle,Title,SKU,Variant Inventory Qty,Continue selling when out of stock\np,Tee,SKU-1,0,${val}\n`;
+      const { records } = loadCsv(csv, 's');
+      expect(records[0]?.meta['inventoryPolicy']).toBe('continue');
+    }
+  });
+
+  it('normalizes product CSV "Continue selling" FALSE/false/no/0 to deny', () => {
+    for (const val of ['FALSE', 'false', 'False', 'no', '0']) {
+      const csv = `Handle,Title,SKU,Variant Inventory Qty,Continue selling when out of stock\np,Tee,SKU-1,5,${val}\n`;
+      const { records } = loadCsv(csv, 's');
+      expect(records[0]?.meta['inventoryPolicy']).toBe('deny');
+    }
+  });
+
   it('throws a helpful error when no SKU column can be found', () => {
     expect(() => loadCsv('Foo,Bar\n1,2\n', 'x')).toThrow(/SKU column/);
   });
