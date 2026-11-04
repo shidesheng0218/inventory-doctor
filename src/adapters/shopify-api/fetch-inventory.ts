@@ -6,9 +6,17 @@ import type { ShopifyClient } from './client.js';
 //     read path and `names` has no default — it must be passed explicitly.
 //   - inventoryLevels needs includeInactive: true to cover all locations.
 //   - inventoryQuantity = total available across locations (still valid).
+//
+// Page sizes are deliberately small. Shopify multiplies nested connection
+// costs, and a single Admin GraphQL query is capped at 1,000 points: the
+// earlier 250 variants × 20 levels requested roughly 5,000 points and could be
+// rejected before any data was returned. 50 × 10 keeps the requested cost far
+// lower; variants with more than 10 locations still take the explicit page
+// query below. Verify the effective cost against a real store before raising
+// either number.
 const INVENTORY_SNAPSHOT_QUERY = /* GraphQL */ `
   query InventorySnapshot($cursor: String) {
-    productVariants(first: 250, after: $cursor) {
+    productVariants(first: 50, after: $cursor) {
       nodes {
         sku
         barcode
@@ -18,7 +26,7 @@ const INVENTORY_SNAPSHOT_QUERY = /* GraphQL */ `
         inventoryItem {
           id
           tracked
-          inventoryLevels(first: 20, includeInactive: true) {
+          inventoryLevels(first: 10, includeInactive: true) {
             nodes {
               location { id name }
               quantities(names: ["available", "on_hand", "committed", "incoming"]) {
@@ -35,8 +43,8 @@ const INVENTORY_SNAPSHOT_QUERY = /* GraphQL */ `
   }
 `;
 
-// A variant with more than 20 locations would be silently truncated by the
-// main query (inventoryLevels(first: 20) returns no error, just a capped
+// A variant with more than 10 locations would be silently truncated by the
+// main query (inventoryLevels(first: 10) returns no error, just a capped
 // list). Multi-location is exactly the scenario this tool exists for, so when
 // a variant reports hasNextPage on its levels we page the rest in explicitly.
 const INVENTORY_LEVELS_PAGE_QUERY = /* GraphQL */ `

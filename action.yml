@@ -30,7 +30,7 @@ inputs:
     description: npm version or dist-tag of inventory-doctor to run (pin a version for reproducible CI)
     required: false
     # "latest" resolves to the published dist-tag. Pinning a version that has
-    # not been published (for example a tagged-but-unreleased 0.5.0) makes every
+    # not been published (for example a tagged-but-unreleased version) makes every
     # consumer of this action fail with a 404, so the default must always be
     # something the registry can resolve.
     default: 'latest'

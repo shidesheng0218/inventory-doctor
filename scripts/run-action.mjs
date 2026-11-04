@@ -6,7 +6,7 @@ try {
   const format = env.INPUT_FORMAT;
   if (!['terminal', 'json', 'markdown', 'html'].includes(format)) throw new Error('Invalid format');
   if (!['true', 'false'].includes(env.INPUT_FAIL_ON_CRITICAL)) throw new Error('fail-on-critical must be true or false');
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(env.INPUT_VERSION ?? '')) throw new Error('version must be an exact npm version');
+  if (!/^(?:[a-z][a-z0-9._-]*|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/.test(env.INPUT_VERSION ?? '')) throw new Error('version must be a published npm version or dist-tag');
   function source(value) {
     if (!value || value.includes('\0') || value.startsWith('-')) throw new Error('Invalid source');
     if (value.startsWith('store:') || value.startsWith('woo:')) return value;

@@ -100,6 +100,14 @@ export class ShopifyClient {
       }
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // 5xx is an upstream fault (gateway, overload, deploy), not a request
+        // the caller can fix. Retry it like a 429 instead of failing the whole
+        // daily run on one transient response.
+        if (res.status >= 500) {
+          lastError = new Error(`Shopify API HTTP ${res.status} from ${this.options.domain}: ${text}`);
+          await this.sleep(BACKOFF_MS);
+          continue;
+        }
         throw new Error(`Shopify API HTTP ${res.status} from ${this.options.domain}: ${text}`);
       }
 

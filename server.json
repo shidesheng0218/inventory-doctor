@@ -3,7 +3,7 @@
   "name": "io.github.shidesheng0218/inventory-doctor",
   "title": "Inventory Doctor",
   "description": "Read-only multi-source e-commerce inventory sync auditor for Shopify, WooCommerce, and CSV exports.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "repository": {
     "url": "https://github.com/shidesheng0218/inventory-doctor",
     "source": "github"
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "inventory-doctor",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "transport": {
         "type": "stdio"
       },

@@ -73,6 +73,13 @@ export class WooClient {
       }
       if (!res.ok) {
         const text = await res.text().catch(() => '');
+        // 5xx is an upstream fault; retry it like a 429 rather than failing the
+        // whole run on one gateway/overload response.
+        if (res.status >= 500) {
+          lastError = new Error(`WooCommerce API HTTP ${res.status} from ${this.base}: ${text}`);
+          await this.sleep(BACKOFF_MS);
+          continue;
+        }
         throw new Error(`WooCommerce API HTTP ${res.status} from ${this.base}: ${text}`);
       }
       const header = res.headers.get('X-WP-TotalPages');

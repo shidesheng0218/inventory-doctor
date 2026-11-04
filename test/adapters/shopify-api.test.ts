@@ -90,6 +90,19 @@ describe('ShopifyClient', () => {
     expect(sleeps).toEqual([1000]);
   });
 
+  it('backs off 1s and retries transient 5xx responses', async () => {
+    const sleeps: number[] = [];
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('upstream unavailable', { status: 503 }))
+      .mockResolvedValueOnce(graphqlResponse({ data: { ok: true }, extensions: { cost: cost(900) } }));
+    const client = makeClient(fetchFn, sleeps);
+    const data = await client.graphql<{ ok: boolean }>('{ ok }');
+    expect(data.ok).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(sleeps).toEqual([1000]);
+  });
+
   it('backs off 1s and retries on THROTTLED GraphQL errors', async () => {
     const sleeps: number[] = [];
     const fetchFn = vi
@@ -199,6 +212,17 @@ describe('fetchInventory', () => {
     const body = String((fetchFn.mock.calls[0] as [string, RequestInit])[1].body);
     expect(body).toContain('quantities(names: [\\"available\\", \\"on_hand\\", \\"committed\\", \\"incoming\\"])');
     expect(body).toContain('includeInactive: true');
+  });
+
+  it('keeps the variant/level page sizes below the single-query cost cap', async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(graphqlResponse(variantPage(['AAA'], false, null)));
+    const client = makeClient(fetchFn);
+    await fetchInventory(client, 'store-a');
+
+    const body = String((fetchFn.mock.calls[0] as [string, RequestInit])[1].body);
+    expect(body).toContain('productVariants(first: 50');
+    expect(body).toContain('inventoryLevels(first: 10');
+    expect(body).not.toContain('productVariants(first: 250');
   });
 });
 

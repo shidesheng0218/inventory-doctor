@@ -93,6 +93,18 @@ describe('WooClient', () => {
     expect(sleeps).toEqual([1000]);
   });
 
+  it('backs off 1s and retries transient 5xx responses', async () => {
+    const sleeps: number[] = [];
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('upstream unavailable', { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 1 }]));
+    const client = makeClient(fetchFn, sleeps);
+    const all = await client.getAll('/products');
+    expect(all).toHaveLength(1);
+    expect(sleeps).toEqual([1000]);
+  });
+
   it('retries transient network errors like 429s', async () => {
     const sleeps: number[] = [];
     const fetchFn = vi

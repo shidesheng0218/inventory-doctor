@@ -82,4 +82,14 @@ describe('action run-step contract', () => {
     expect(runAction({ format: 'invalid' }).status).toBe(2);
     expect(runAction({ version: 'latest;touch x' }).status).toBe(2);
   });
+
+  it('accepts the published dist-tag default as the version', () => {
+    // action.yml defaults to "latest" because pinning an unpublished semver
+    // makes every consumer fail with a 404. The input must therefore accept
+    // dist-tags, not only exact versions.
+    const result = runAction({ version: 'latest' });
+    expect(result.status).toBe(0);
+    expect(result.args).toContain('inventory-doctor@latest');
+    expect(runAction({ version: 'next' }).status).toBe(0);
+  });
 });

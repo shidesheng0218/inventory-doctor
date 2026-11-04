@@ -56,10 +56,19 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
     const rawSku =
       latestPoint?.rawSku ?? earlierPoints.find((e) => e.point?.rawSku != null)?.point?.rawSku ?? canonical;
 
-    // Need a positive stock level in every earlier snapshot to claim "stable".
+    // The immediately preceding snapshot is the stability anchor: yesterday
+    // must have had stock. Older zero days are allowed, because a SKU that was
+    // out of stock earlier in the window and has since been restocked can still
+    // be wiped overnight. Requiring EVERY earlier snapshot positive made the
+    // rule blind for any SKU that had sold out once inside the 30-day window.
+    const lastPrior = earlierPoints[earlierPoints.length - 1];
+    const lastStocked = lastPrior?.point?.quantity ?? null;
+    if (lastStocked === null || lastStocked <= 0) continue;
+
     const stockedEarlier = earlierPoints.filter((e) => e.point !== undefined && e.point.quantity !== null && e.point.quantity > 0);
-    if (stockedEarlier.length < earlier.length || stockedEarlier.length < 2) continue;
-    const lastStocked = stockedEarlier[stockedEarlier.length - 1]?.point?.quantity ?? 0;
+    // The anchor itself is one; require at least one other positive snapshot so
+    // a SKU that appeared only yesterday is not mistaken for stable history.
+    if (stockedEarlier.length < 2) continue;
     const history = earlierPoints.map((e) => `${e.at}: ${e.point?.quantity ?? '—'}`).join(', ');
 
     if (latestPoint === undefined || latestPoint.quantity === null) {
@@ -67,7 +76,7 @@ export function nightlyZero(records: InventoryRecord[]): Finding[] {
         rule: 'nightly-zero',
         severity: 'warning',
         sku: rawSku,
-        message: `"${rawSku}" had stock in ${stockedEarlier.length} consecutive snapshots but has no numeric quantity in the latest (${latest})`,
+        message: `"${rawSku}" had stock in ${stockedEarlier.length} earlier snapshots but has no numeric quantity in the latest (${latest})`,
         detail: { sku: rawSku, latest, history },
         suggestion: 'Check whether the product/variant still exists, has a numeric quantity and is included in the export or sync scope.',
         evidence: [`Earlier quantities: ${history}.`, `No numeric quantity for this SKU at ${latest}.`],

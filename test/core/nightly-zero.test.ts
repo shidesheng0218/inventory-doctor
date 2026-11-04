@@ -10,6 +10,7 @@ function snap(sku: string, quantity: number | null, at: string) {
 const T1 = '2026-09-01T08:00:00';
 const T2 = '2026-09-02T08:00:00';
 const T3 = '2026-09-03T08:00:00';
+const T4 = '2026-09-04T08:00:00';
 
 describe('nightly-zero (time-series rule)', () => {
   it('orders shuffled same-second snapshots by numeric sequence across many rows', () => {
@@ -35,6 +36,33 @@ describe('nightly-zero (time-series rule)', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ rule: 'nightly-zero', severity: 'critical', sku: 'WIDGET-1' });
     expect(findings[0]?.message).toContain('reads 0 in the latest');
+  });
+
+  it('does not go blind when an older snapshot in the window was zero', () => {
+    // The SKU sold out early in the window, was restocked, then read 0 again.
+    // Only the immediately preceding snapshot is the stability anchor; requiring
+    // every earlier snapshot positive would hide this second cliff.
+    const records = [
+      snap('RESTOCK-1', 20, T1),
+      snap('RESTOCK-1', 0, T2),
+      snap('RESTOCK-1', 20, T3),
+      snap('RESTOCK-1', 0, T4),
+    ];
+    const findings = nightlyZero(records);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ rule: 'nightly-zero', severity: 'critical', sku: 'RESTOCK-1' });
+  });
+
+  it('stays silent when the immediately preceding snapshot was already zero', () => {
+    // A SKU that has been out of stock for the last two days is not a sudden
+    // overnight cliff, even if it had stock earlier in the window.
+    const records = [
+      snap('OLD-1', 20, T1),
+      snap('OLD-1', 0, T2),
+      snap('OLD-1', 0, T3),
+      snap('OLD-1', 0, T4),
+    ];
+    expect(nightlyZero(records)).toHaveLength(0);
   });
 
   it('flags a SKU that vanishes from the latest snapshot', () => {
