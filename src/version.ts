@@ -4,4 +4,4 @@
 //   npm run sync-version <version>
 // CI enforces consistency with:
 //   npm run check:versions
-export const VERSION = '0.5.0';
+export const VERSION = '0.5.1';
