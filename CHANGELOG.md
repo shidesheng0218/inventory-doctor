@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.3 — 2026-11-04
+
+Unifies the 0.5.2 line (new rules and CSV boundary fixes) with the 0.5.1
+compatibility fixes. No public API or CLI flag changes.
+
+### Added
+
+- `location-orphan` and `quantity-basis-mismatch` rules, plus the CSV boundary
+  fixes from the parallel 0.5.2 line.
+
+### Fixed
+
+- All 0.5.1 fixes: smaller Shopify snapshot pages, a recent-snapshot anchor for
+  `nightly-zero`, transient 5xx retries, and the GitHub Action dist-tag default.
+
+### Verification
+
+- 366 tests across 26 files.
+- `npm run typecheck`, `npm run build`, `npm run check:versions`.
+
 ## 0.5.1 — 2026-11-04
 
 Compatibility and reliability fixes for live Shopify/WooCommerce runs. No
